@@ -1,9 +1,18 @@
 /**
- * TinyTube Pro v4.0 (Tizen 4.0 Legacy Edition)
- * - Removed Optional Chaining (?.) for Chrome 56
- * - Removed Array.flat() for Chrome 56
- * - Removed AbortController
- * - Fixed DeArrow Spam & Race Conditions
+ * TinyTube Pro v4.1 (Tizen 4.0 Legacy Edition)
+ * Compatibility:
+ * - Chrome 56+ (No Optional Chaining, No Array.flat, No AbortController)
+ * - Promise.any polyfill included
+ * - LRU cache for DeArrow with automatic eviction
+ * Optimizations:
+ * - Document fragment for batch DOM rendering
+ * - Sorted SponsorBlock segments with early exit
+ * - Bounded grid navigation
+ * UI Improvements:
+ * - Video duration/view count/date badges
+ * - Enhanced focus indicators with glow effects
+ * - Improved loading states and error handling
+ * - Better card design with smooth animations
  */
 
 const FALLBACK_INSTANCES = [
@@ -17,6 +26,39 @@ const SPONSOR_API = "https://sponsor.ajay.app/api/skipSegments";
 const DEARROW_API = "https://dearrow.ajay.app/api/branding";
 const CONCURRENCY_LIMIT = 3;
 
+// Simple LRU Cache for Tizen 4.0 (Chrome 56 compatible)
+function LRUCache(maxSize) {
+    this.maxSize = maxSize;
+    this.cache = new Map();
+    this.order = []; // Oldest to newest
+}
+LRUCache.prototype.get = function(key) {
+    if (!this.cache.has(key)) return undefined;
+    // Move to end (most recently used)
+    var idx = this.order.indexOf(key);
+    if (idx > -1) {
+        this.order.splice(idx, 1);
+        this.order.push(key);
+    }
+    return this.cache.get(key);
+};
+LRUCache.prototype.set = function(key, value) {
+    if (this.cache.has(key)) {
+        // Update existing - move to end
+        var idx = this.order.indexOf(key);
+        if (idx > -1) this.order.splice(idx, 1);
+    } else if (this.order.length >= this.maxSize) {
+        // Remove oldest entry
+        var oldest = this.order.shift();
+        this.cache.delete(oldest);
+    }
+    this.cache.set(key, value);
+    this.order.push(key);
+};
+LRUCache.prototype.has = function(key) {
+    return this.cache.has(key);
+};
+
 const App = {
     view: "BROWSE",
     api: null,
@@ -27,7 +69,7 @@ const App = {
     playerMode: "BYPASS",
     sponsorSegs: [],
     exitCounter: 0,
-    deArrowCache: new Map(),
+    deArrowCache: new LRUCache(200),
     hudTimer: null
 };
 
@@ -42,8 +84,8 @@ const Utils = {
         return e;
     },
     safeParse: (str, def) => {
-        try { return JSON.parse(str) || def; } 
-        catch { return def; }
+        try { return JSON.parse(str) || def; }
+        catch(e) { return def; }
     },
     // Polyfill for Promise.any
     any: (promises) => {
@@ -84,9 +126,28 @@ const Utils = {
     },
     formatTime: (sec) => {
         if (!sec || isNaN(sec)) return "0:00";
-        const m = Math.floor(sec/60);
+        const h = Math.floor(sec/3600);
+        const m = Math.floor((sec%3600)/60);
         const s = Math.floor(sec%60);
-        return `${m}:${s<10?'0'+s:s}`;
+        if (h > 0) return h + ":" + (m<10?'0'+m:m) + ":" + (s<10?'0'+s:s);
+        return m + ":" + (s<10?'0'+s:s);
+    },
+    formatViews: (num) => {
+        if (!num || isNaN(num)) return "";
+        if (num >= 1000000) return (num/1000000).toFixed(1).replace(/\.0$/, '') + "M views";
+        if (num >= 1000) return (num/1000).toFixed(1).replace(/\.0$/, '') + "K views";
+        return num + " views";
+    },
+    formatDate: (timestamp) => {
+        if (!timestamp) return "";
+        var now = Date.now() / 1000;
+        var diff = now - timestamp;
+        if (diff < 3600) return Math.floor(diff/60) + " min ago";
+        if (diff < 86400) return Math.floor(diff/3600) + " hours ago";
+        if (diff < 604800) return Math.floor(diff/86400) + " days ago";
+        if (diff < 2592000) return Math.floor(diff/604800) + " weeks ago";
+        if (diff < 31536000) return Math.floor(diff/2592000) + " months ago";
+        return Math.floor(diff/31536000) + " years ago";
     },
     getVideoId: (item) => {
         if (!item) return null;
@@ -180,7 +241,7 @@ const Network = {
             Feed.loadHome();
             Network.updateInstanceList();
         } catch (e) {
-            el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable.</p>";
+            el("grid-container").innerHTML = '<div class="network-error"><h3>Network Error</h3><p>All nodes unreachable. Check your connection.</p></div>';
         }
     },
     ping: async (url) => {
@@ -190,7 +251,7 @@ const Network = {
             const fetcher = fetch(`${url}/trending`);
             const res = await Promise.race([fetcher, timeout]);
             return res.ok;
-        } catch { return false; }
+        } catch(e) { return false; }
     },
     updateInstanceList: async () => {
         try {
@@ -211,8 +272,8 @@ const Feed = {
             return Feed.fetch("/trending");
         }
 
-        el("section-title").textContent = `My Feed (${subs.length})`;
-        el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon">🔄</div><p>Aggregating...</p></div>';
+        el("section-title").textContent = "My Feed (" + subs.length + ")";
+        el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Loading your feed...</p></div>';
 
         try {
             const results = await Utils.processQueue(subs, CONCURRENCY_LIMIT, async (sub) => {
@@ -221,7 +282,7 @@ const Feed = {
                     if(!res.ok) return [];
                     const data = await res.json();
                     return data.slice(0, 2); 
-                } catch { return []; }
+                } catch(e) { return []; }
             });
 
             // Chrome 56 Compatibility: [].concat(...arr) instead of flat()
@@ -238,14 +299,14 @@ const Feed = {
     },
     fetch: async (endpoint) => {
         if(!App.api) return;
-        el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon">🔄</div></div>';
+        el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Loading...</p></div>';
         try {
             const res = await fetch(`${App.api}${endpoint}`);
             const data = await res.json();
             UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
         } catch(e) { 
             log("Feed Error");
-            el("grid-container").innerHTML = "<p>Connection Failed. Try Reloading.</p>"; 
+            el("grid-container").innerHTML = '<div class="network-error"><h3>Connection Failed</h3><p>Unable to fetch content. Try reloading.</p></div>'; 
         }
     },
     renderSubs: () => {
@@ -261,50 +322,82 @@ const Feed = {
 const UI = {
     renderGrid: (data) => {
         App.items = data || [];
-        const grid = el("grid-container");
+        var grid = el("grid-container");
         grid.textContent = "";
 
         if (App.items.length === 0) {
-            grid.innerHTML = "<p>No results found.</p>";
+            grid.innerHTML = '<div class="empty-state"><div class="icon">📭</div><h3>No Results</h3><p>Try a different search or check your connection</p></div>';
             return;
         }
 
-        App.items.forEach((item, idx) => {
-            if(item.type && item.type !== "video" && item.type !== "channel" && item.type !== "shortVideo") return;
+        // Use document fragment for batch DOM operations (performance)
+        var fragment = document.createDocumentFragment();
+        var cardIndex = 0;
 
-            const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
-            div.id = `card-${idx}`;
+        for (var i = 0; i < App.items.length; i++) {
+            var item = App.items[i];
+            if(item.type && item.type !== "video" && item.type !== "channel" && item.type !== "shortVideo") continue;
+
+            var div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
+            div.id = "card-" + cardIndex;
+            cardIndex++;
 
             // Tizen 4.0 Compatibility: Manual Optional Chaining
-            let thumbUrl = "icon.png";
+            var thumbUrl = "icon.png";
             if (item.videoThumbnails && item.videoThumbnails.length > 0) thumbUrl = item.videoThumbnails[0].url;
             else if (item.authorThumbnails && item.authorThumbnails.length > 0) thumbUrl = item.authorThumbnails[0].url;
             else if (item.thumbnail) thumbUrl = item.thumbnail;
 
             // Image Construction with Aspect Ratio Container
             if (item.type === "channel") {
-                const img = Utils.create("img", "c-avatar");
-                img.src = thumbUrl;
-                div.appendChild(img);
-                div.appendChild(Utils.create("h3", null, item.author));
+                var cImg = Utils.create("img", "c-avatar");
+                cImg.src = thumbUrl;
+                cImg.alt = item.author || "Channel";
+                div.appendChild(cImg);
+                div.appendChild(Utils.create("h3", null, item.author || "Unknown Channel"));
                 if(DB.isSubbed(item.authorId)) div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
             } else {
-                const thumbCont = Utils.create("div", "thumb-container");
-                const img = Utils.create("img", "thumb");
+                var thumbCont = Utils.create("div", "thumb-container");
+                var img = Utils.create("img", "thumb");
                 img.src = thumbUrl;
+                img.alt = item.title || "Video";
                 thumbCont.appendChild(img);
+
+                // Duration badge
+                if (item.lengthSeconds && item.lengthSeconds > 0) {
+                    var durationBadge = Utils.create("span", "duration-badge", Utils.formatTime(item.lengthSeconds));
+                    thumbCont.appendChild(durationBadge);
+                }
+
+                // Live badge
+                if (item.liveNow) {
+                    var liveBadge = Utils.create("span", "live-badge", "LIVE");
+                    thumbCont.appendChild(liveBadge);
+                }
+
                 div.appendChild(thumbCont);
 
-                const meta = Utils.create("div", "meta");
-                const h3 = Utils.create("h3", null, item.title);
-                h3.id = `title-${idx}`;
+                var meta = Utils.create("div", "meta");
+                var h3 = Utils.create("h3", null, item.title || "Untitled");
+                h3.id = "title-" + i;
                 meta.appendChild(h3);
-                meta.appendChild(Utils.create("p", null, item.author));
+
+                // Author with view count
+                var authorText = item.author || "Unknown";
+                if (item.viewCount) {
+                    authorText += " • " + Utils.formatViews(item.viewCount);
+                }
+                if (item.published) {
+                    var dateStr = Utils.formatDate(item.published);
+                    if (dateStr) authorText += " • " + dateStr;
+                }
+                meta.appendChild(Utils.create("p", null, authorText));
                 div.appendChild(meta);
             }
-            grid.appendChild(div);
-        });
+            fragment.appendChild(div);
+        }
 
+        grid.appendChild(fragment);
         App.focus = { area: "grid", index: 0 };
         UI.updateFocus();
     },
@@ -341,8 +434,7 @@ const UI = {
             return;
         }
 
-        if (App.deArrowCache.size > 200) App.deArrowCache.clear();
-
+        // LRU cache handles eviction automatically
         fetch(`${DEARROW_API}?videoID=${vId}`)
             .then(r=>r.json())
             .then(d=>{
@@ -385,7 +477,11 @@ const Player = {
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
 
         fetch(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`)
-            .then(r=>r.ok?r.json():[]).then(s => App.sponsorSegs = s).catch(()=>{});
+            .then(function(r){return r.ok?r.json():[];})
+            .then(function(s){
+                // Sort segments by start time for optimized skipping
+                App.sponsorSegs = Array.isArray(s) ? s.sort(function(a,b){return a.segment[0]-b.segment[0];}) : [];
+            }).catch(function(){App.sponsorSegs=[];});
 
         if (App.api) {
             try {
@@ -437,10 +533,14 @@ const Player = {
             el("curr-time").textContent = Utils.formatTime(p.currentTime);
             el("total-time").textContent = Utils.formatTime(p.duration);
 
-            for(const s of App.sponsorSegs) {
+            // Optimized: sorted segments allow early exit
+            for(var i = 0; i < App.sponsorSegs.length; i++) {
+                var s = App.sponsorSegs[i];
+                if(p.currentTime < s.segment[0]) break; // Past all possible segments
                 if(p.currentTime >= s.segment[0] && p.currentTime < s.segment[1]) {
                     p.currentTime = s.segment[1];
                     Utils.toast("Skipped Sponsor");
+                    break;
                 }
             }
         };
@@ -473,7 +573,7 @@ function setupRemote() {
                     else { el("enforcement-container").innerHTML=""; p.style.display="block"; p.play(); App.playerMode="BYPASS"; }
                     break;
                 case 406: // BLUE
-                    if(item.authorId) DB.toggleSub(item.authorId, item.author);
+                    if(item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
                     break;
             }
             return;
@@ -497,7 +597,10 @@ function setupRemote() {
                 else if (App.focus.area === "menu") { App.menuIdx--; if(App.menuIdx<0)App.menuIdx=0; }
                 break;
             case 40: // DOWN
-                if (App.focus.area === "grid") App.focus.index += 4;
+                if (App.focus.area === "grid") {
+                    const nextIdx = App.focus.index + 4;
+                    if (nextIdx < App.items.length) App.focus.index = nextIdx;
+                }
                 else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>3)App.menuIdx=3; }
                 break;
             case 37: // LEFT
@@ -508,7 +611,7 @@ function setupRemote() {
                 break;
             case 39: // RIGHT
                 if (App.focus.area === "menu") { App.focus.area = "grid"; el("sidebar").classList.remove("expanded"); App.focus.index = 0; }
-                else if (App.focus.area === "grid") App.focus.index++;
+                else if (App.focus.area === "grid" && App.focus.index < App.items.length - 1) App.focus.index++;
                 break;
             case 13: // ENTER
                 if (App.focus.area === "menu") App.actions.menuSelect();
@@ -539,7 +642,7 @@ function setupRemote() {
     });
 }
 
-const App.actions = {
+App.actions = {
     menuSelect: () => {
         if(App.menuIdx===0) Feed.loadHome();
         if(App.menuIdx===1) Feed.renderSubs();
