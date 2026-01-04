@@ -1,11 +1,11 @@
 /**
- * TinyTube Pro v3.1 (Platinum Master)
- * - Fixed: Hotel California Bug
- * - Fixed: Network Race Condition (Promise.any)
- * - Fixed: DeArrow N+1 Spam (Lazy Load)
+ * TinyTube Pro v3.5 (Diamond Edition)
+ * - Fixed: Tizen 4.0 Compatibility (Promise.any polyfill)
+ * - Fixed: Invisible HUD bug
+ * - Fixed: DeArrow async race condition
+ * - Fixed: Exit logic reset
  */
 
-// --- CONFIG ---
 const FALLBACK_INSTANCES = [
     "https://inv.nadeko.net/api/v1",
     "https://yewtu.be/api/v1",
@@ -17,7 +17,6 @@ const SPONSOR_API = "https://sponsor.ajay.app/api/skipSegments";
 const DEARROW_API = "https://dearrow.ajay.app/api/branding";
 const CONCURRENCY_LIMIT = 3;
 
-// --- STATE ---
 const App = {
     view: "BROWSE",
     api: null,
@@ -28,7 +27,8 @@ const App = {
     playerMode: "BYPASS",
     sponsorSegs: [],
     exitCounter: 0,
-    deArrowCache: new Map() // Cache for DeArrow
+    deArrowCache: new Map(),
+    hudTimer: null
 };
 
 const el = (id) => document.getElementById(id);
@@ -44,6 +44,19 @@ const Utils = {
     safeParse: (str, def) => {
         try { return JSON.parse(str) || def; } 
         catch { return def; }
+    },
+    // FIX 1: Tizen 4.0 Polyfill for Promise.any
+    any: (promises) => {
+        return new Promise((resolve, reject) => {
+            let errors = [];
+            let rejectedCount = 0;
+            if(promises.length === 0) reject(new Error("No promises"));
+            promises.forEach(p => p.then(resolve).catch(e => {
+                errors.push(e);
+                rejectedCount++;
+                if (rejectedCount === promises.length) reject(errors);
+            }));
+        });
     },
     processQueue: async (items, limit, asyncFn) => {
         let results = [];
@@ -108,7 +121,7 @@ const DB = {
     isSubbed: (id) => !!DB.getSubs().find(s => s.id === id)
 };
 
-// --- 3. NETWORK ENGINE (Parallel Race) ---
+// --- 3. NETWORK ENGINE ---
 const Network = {
     connect: async () => {
         const custom = localStorage.getItem("customBase");
@@ -118,16 +131,29 @@ const Network = {
             return;
         }
 
+        const cached = localStorage.getItem("lastWorkingApi");
+        if(cached) {
+            try {
+                if(await Network.ping(cached)) {
+                    App.api = cached;
+                    log(`Restored: ${cached.split('/')[2]}`);
+                    Feed.loadHome();
+                    Network.updateInstanceList();
+                    return;
+                }
+            } catch(e) {}
+        }
+
         log("Scanning Network Mesh...");
         const instances = Utils.safeParse(localStorage.getItem("cached_instances"), FALLBACK_INSTANCES);
         
-        // Parallel Race for Speed
         const pings = instances.map(url => 
             Network.ping(url).then(ok => ok ? url : Promise.reject())
         );
 
         try {
-            const winner = await Promise.any(pings);
+            // FIX: Use polyfill instead of Promise.any
+            const winner = await Utils.any(pings);
             App.api = winner;
             log(`Connected: ${winner.split('/')[2]}`);
             localStorage.setItem("lastWorkingApi", winner);
@@ -206,7 +232,7 @@ const Feed = {
     }
 };
 
-// --- 5. UI RENDERER (Lazy DeArrow) ---
+// --- 5. UI RENDERER ---
 const UI = {
     renderGrid: (data) => {
         App.items = data || [];
@@ -235,7 +261,7 @@ const UI = {
             } else {
                 const meta = Utils.create("div", "meta");
                 const h3 = Utils.create("h3", null, item.title);
-                h3.id = `title-${idx}`; // Hook for DeArrow
+                h3.id = `title-${idx}`;
                 meta.appendChild(h3);
                 meta.appendChild(Utils.create("p", null, item.author));
                 div.appendChild(meta);
@@ -257,7 +283,6 @@ const UI = {
                 card.classList.add("focused");
                 card.scrollIntoView({block: "center", behavior: "smooth"});
                 
-                // LAZY DEARROW FETCH (On Focus Only)
                 const item = App.items[App.focus.index];
                 if (item && item.type !== "channel" && !item.deArrowChecked) {
                     UI.fetchDeArrow(item, App.focus.index);
@@ -274,21 +299,29 @@ const UI = {
         const vId = item.videoId || item.url?.split("v=")[1];
         if(!vId) return;
 
-        // Check Cache
         if(App.deArrowCache.has(vId)) {
-            const d = App.deArrowCache.get(vId);
-            UI.applyDeArrow(d, idx);
+            UI.applyDeArrow(App.deArrowCache.get(vId), idx, vId);
             return;
         }
+
+        // Cache Limit Cleanup
+        if (App.deArrowCache.size > 200) App.deArrowCache.clear();
 
         fetch(`${DEARROW_API}?videoID=${vId}`)
             .then(r=>r.json())
             .then(d=>{
                 App.deArrowCache.set(vId, d);
-                UI.applyDeArrow(d, idx);
+                UI.applyDeArrow(d, idx, vId);
             }).catch(()=>{});
     },
-    applyDeArrow: (d, idx) => {
+    // FIX 3: Race Condition check
+    applyDeArrow: (d, idx, originalId) => {
+        if (!App.items[idx]) return;
+        const currentId = App.items[idx].videoId || App.items[idx].url?.split("v=")[1];
+        
+        // Safety check: Is the item at this index still the same video?
+        if (currentId !== originalId) return;
+
         if(d.titles?.[0]) {
             const elTitle = el(`title-${idx}`);
             if(elTitle) elTitle.textContent = d.titles[0].title;
@@ -303,6 +336,8 @@ const Player = {
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
         el("player-layer").classList.remove("hidden");
+        // FIX 2: Make HUD visible
+        el("player-hud").classList.add("visible");
         
         const vId = item.videoId || item.url.split("v=")[1];
         el("player-title").textContent = item.title;
@@ -320,7 +355,6 @@ const Player = {
                 let validStream = data.videoStreams.find(s => s.quality === "1080p" && s.format === "MPEG-4") 
                                || data.videoStreams.find(s => s.format === "MPEG-4");
 
-                // Capability Check Fallback
                 if(!validStream && data.videoStreams.length > 0) {
                     for(let s of data.videoStreams) {
                          if(p.canPlayType(s.mimeType) !== "") { validStream = s; break; }
@@ -345,6 +379,13 @@ const Player = {
         Utils.toast("Enforcement Mode Active");
     },
     setupHUD: (p) => {
+        // Reset timer on interaction
+        const resetTimer = () => {
+            el("player-hud").classList.add("visible");
+            if(App.hudTimer) clearTimeout(App.hudTimer);
+            App.hudTimer = setTimeout(() => el("player-hud").classList.remove("visible"), 4000);
+        };
+
         p.ontimeupdate = () => {
             el("progress-fill").style.width = (p.currentTime / p.duration * 100) + "%";
             el("curr-time").textContent = Utils.formatTime(p.currentTime);
@@ -357,13 +398,16 @@ const Player = {
                 }
             }
         };
+
+        // Hook interactions to show HUD
+        ["play", "pause", "seeked"].forEach(e => p.addEventListener(e, resetTimer));
     }
 };
 
 // --- 7. INPUT HANDLER ---
 function setupRemote() {
     document.addEventListener('keydown', (e) => {
-        // FIX 1: HOTEL CALIFORNIA BUG
+        // FIX 4: HOTEL CALIFORNIA (Safety Check)
         if (e.keyCode !== 10009) App.exitCounter = 0;
 
         if (App.view === "PLAYER") {
@@ -451,6 +495,7 @@ function setupRemote() {
     });
 }
 
+// --- ACTIONS ---
 const App.actions = {
     menuSelect: () => {
         if(App.menuIdx===0) Feed.loadHome();
