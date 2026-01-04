@@ -10,7 +10,7 @@ Unlike traditional clients that rely on Google's central authentication servers,
 
 ---
 
-## 🏆 Engineering Highlights (Class Project 2026)
+## 🏆 Engineering Highlights
 
 This project demonstrates **Resilient Frontend Architecture** in a constrained TV environment:
 
