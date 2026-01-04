@@ -63,10 +63,13 @@ const Utils = {
         const executing = [];
         for (const item of items) {
             const p = asyncFn(item).then(r => results.push(r));
-            executing.push(p);
+            const wrapped = p.then(() => {
+                const idx = executing.indexOf(wrapped);
+                if (idx !== -1) executing.splice(idx, 1);
+            });
+            executing.push(wrapped);
             if (executing.length >= limit) {
                 await Promise.race(executing);
-                executing.splice(executing.findIndex(e => e === p), 1);
             }
         }
         await Promise.all(executing);
@@ -84,6 +87,24 @@ const Utils = {
         const m = Math.floor(sec/60);
         const s = Math.floor(sec%60);
         return `${m}:${s<10?'0'+s:s}`;
+    },
+    getVideoId: (item) => {
+        if (!item) return null;
+        if (item.videoId) return item.videoId;
+        if (!item.url) return null;
+        const vMatch = item.url.match(/[?&]v=([^&]+)/);
+        if (vMatch && vMatch[1]) return vMatch[1];
+        const shortsMatch = item.url.match(/shorts\/([^?&/]+)/);
+        if (shortsMatch && shortsMatch[1]) return shortsMatch[1];
+        return null;
+    },
+    getAuthorThumb: (item) => {
+        if (!item) return null;
+        if (item.authorThumbnails && item.authorThumbnails.length > 0 && item.authorThumbnails[0].url) {
+            return item.authorThumbnails[0].url;
+        }
+        if (item.thumbnail) return item.thumbnail;
+        return null;
     }
 };
 
@@ -312,8 +333,7 @@ const UI = {
     fetchDeArrow: (item, idx) => {
         item.deArrowChecked = true;
         // Tizen 4.0 safe check
-        let vId = item.videoId;
-        if (!vId && item.url) vId = item.url.split("v=")[1];
+        const vId = Utils.getVideoId(item);
         if(!vId) return;
 
         if(App.deArrowCache.has(vId)) {
@@ -334,8 +354,7 @@ const UI = {
         if (!App.items[idx]) return;
         
         // Race Condition Check
-        let currentId = App.items[idx].videoId;
-        if (!currentId && App.items[idx].url) currentId = App.items[idx].url.split("v=")[1];
+        const currentId = Utils.getVideoId(App.items[idx]);
         
         if (currentId !== originalId) return;
 
@@ -356,8 +375,11 @@ const Player = {
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
         
-        let vId = item.videoId;
-        if (!vId && item.url) vId = item.url.split("v=")[1];
+        const vId = Utils.getVideoId(item);
+        if (!vId) {
+            Utils.toast("Unable to play this video.");
+            return;
+        }
 
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
@@ -445,8 +467,8 @@ function setupRemote() {
                 case 37: if(App.playerMode==="BYPASS") p.currentTime -= 10; break;
                 case 39: if(App.playerMode==="BYPASS") p.currentTime += 10; break;
                 case 403: // RED
-                    let vId = item.videoId;
-                    if (!vId && item.url) vId = item.url.split("v=")[1];
+                    const vId = Utils.getVideoId(item);
+                    if (!vId) return;
                     if(App.playerMode==="BYPASS") Player.enforce(vId);
                     else { el("enforcement-container").innerHTML=""; p.style.display="block"; p.play(); App.playerMode="BYPASS"; }
                     break;
@@ -492,14 +514,14 @@ function setupRemote() {
                 if (App.focus.area === "menu") App.actions.menuSelect();
                 if (App.focus.area === "grid") {
                     const item = App.items[App.focus.index];
-                    if (item.type === "channel") DB.toggleSub(item.authorId, item.author, item.authorThumbnails?.[0]?.url);
+                    if (item.type === "channel") DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
                     else Player.start(item);
                 }
                 break;
             case 406: // BLUE
                  if (App.focus.area === "grid") {
                     const i = App.items[App.focus.index];
-                    if(i.authorId) DB.toggleSub(i.authorId, i.author, i.authorThumbnails?.[0]?.url);
+                    if(i.authorId) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i));
                  }
                  break;
             case 10009: // BACK
