@@ -413,7 +413,13 @@ iframe {
 #hud-badges {
     display: flex;
     align-items: center;
-    gap: 12px;
+    /* Fallback for Tizen 4.0 - use margin instead of gap */
+}
+#hud-badges > * {
+    margin-right: 12px;
+}
+#hud-badges > *:last-child {
+    margin-right: 0;
 }
 .badge {
     padding: 8px 16px;
@@ -441,7 +447,13 @@ iframe {
     border-radius: 10px;
     border: 1px solid #333;
     display: flex;
-    gap: 20px;
+    /* Fallback for Tizen 4.0 - use margin instead of gap */
+}
+#controls-hint > span {
+    margin-right: 20px;
+}
+#controls-hint > span:last-child {
+    margin-right: 0;
 }
 
 /* TOAST */
@@ -474,11 +486,14 @@ iframe {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0,0,0,0.92);
+    /* Fallback for Tizen 4.0 which doesn't support backdrop-filter */
+    background: rgba(0,0,0,0.95);
     z-index: 200;
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Progressive enhancement for newer Tizen versions */
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 .modal {
@@ -531,8 +546,14 @@ iframe {
 }
 .button-row {
     display: flex;
-    gap: 15px;
     margin-top: 35px;
+    /* Fallback for Tizen 4.0 - use margin instead of gap */
+}
+.button-row > button {
+    margin-right: 15px;
+}
+.button-row > button:last-child {
+    margin-right: 0;
 }
 .modal button {
     padding: 14px 28px;
