@@ -1,6 +1,8 @@
 /**
- * TinyTube Pro v3.0 (Engineering Gold Master)
- * Features: Concurrent Feed, XSS Protection, Capability Checks, Resilience
+ * TinyTube Pro v3.1 (Platinum Master)
+ * - Fixed: Hotel California Bug
+ * - Fixed: Network Race Condition (Promise.any)
+ * - Fixed: DeArrow N+1 Spam (Lazy Load)
  */
 
 // --- CONFIG ---
@@ -13,7 +15,7 @@ const FALLBACK_INSTANCES = [
 const DYNAMIC_LIST_URL = "https://api.invidious.io/instances.json?sort_by=health";
 const SPONSOR_API = "https://sponsor.ajay.app/api/skipSegments";
 const DEARROW_API = "https://dearrow.ajay.app/api/branding";
-const CONCURRENCY_LIMIT = 3; // Fix N+1 DoS risk
+const CONCURRENCY_LIMIT = 3;
 
 // --- STATE ---
 const App = {
@@ -25,28 +27,24 @@ const App = {
     profileId: 0,
     playerMode: "BYPASS",
     sponsorSegs: [],
-    exitCounter: 0, // For double-back exit
-    timers: [] // For cleanup
+    exitCounter: 0,
+    deArrowCache: new Map() // Cache for DeArrow
 };
 
-// --- DOM CACHE ---
 const el = (id) => document.getElementById(id);
 
-// --- 1. SAFE UTILS (Security & Stability) ---
+// --- 1. SAFE UTILS ---
 const Utils = {
-    // Prevent XSS by using TextContent
     create: (tag, cls, text) => {
         const e = document.createElement(tag);
         if(cls) e.className = cls;
         if(text) e.textContent = text;
         return e;
     },
-    // Prevent JSON crashes
     safeParse: (str, def) => {
         try { return JSON.parse(str) || def; } 
         catch { return def; }
     },
-    // Limit Network Concurrency
     processQueue: async (items, limit, asyncFn) => {
         let results = [];
         const executing = [];
@@ -55,7 +53,7 @@ const Utils = {
             executing.push(p);
             if (executing.length >= limit) {
                 await Promise.race(executing);
-                executing.splice(executing.findIndex(e => e === p), 1); // remove finished
+                executing.splice(executing.findIndex(e => e === p), 1);
             }
         }
         await Promise.all(executing);
@@ -65,18 +63,18 @@ const Utils = {
         const t = el("toast");
         t.textContent = msg;
         t.classList.remove("hidden");
-        // Clear previous timer to prevent overlapping fade-outs
         if(t.timer) clearTimeout(t.timer);
         t.timer = setTimeout(() => t.classList.add("hidden"), 3000);
     },
     formatTime: (sec) => {
+        if (!sec || isNaN(sec)) return "0:00";
         const m = Math.floor(sec/60);
         const s = Math.floor(sec%60);
         return `${m}:${s<10?'0'+s:s}`;
     }
 };
 
-// --- 2. LOCAL DATABASE (Robust) ---
+// --- 2. LOCAL DATABASE ---
 const DB = {
     loadProfile: () => {
         App.profileId = parseInt(localStorage.getItem("tt_pid") || "0");
@@ -110,7 +108,7 @@ const DB = {
     isSubbed: (id) => !!DB.getSubs().find(s => s.id === id)
 };
 
-// --- 3. NETWORK ENGINE (Resilient) ---
+// --- 3. NETWORK ENGINE (Parallel Race) ---
 const Network = {
     connect: async () => {
         const custom = localStorage.getItem("customBase");
@@ -120,45 +118,35 @@ const Network = {
             return;
         }
 
-        // Try cached healthy instance first
-        const cached = localStorage.getItem("lastWorkingApi");
-        if(cached) {
-            try {
-                if(await Network.ping(cached)) {
-                    App.api = cached;
-                    log(`Restored: ${cached.split('/')[2]}`);
-                    Feed.loadHome();
-                    Network.updateInstanceList(); // Update background
-                    return;
-                }
-            } catch(e) {}
-        }
-
         log("Scanning Network Mesh...");
         const instances = Utils.safeParse(localStorage.getItem("cached_instances"), FALLBACK_INSTANCES);
         
-        for (const url of instances) {
-            if(await Network.ping(url)) {
-                App.api = url;
-                log(`Connected: ${url.split('/')[2]}`);
-                localStorage.setItem("lastWorkingApi", url);
-                Feed.loadHome();
-                return;
-            }
+        // Parallel Race for Speed
+        const pings = instances.map(url => 
+            Network.ping(url).then(ok => ok ? url : Promise.reject())
+        );
+
+        try {
+            const winner = await Promise.any(pings);
+            App.api = winner;
+            log(`Connected: ${winner.split('/')[2]}`);
+            localStorage.setItem("lastWorkingApi", winner);
+            Feed.loadHome();
+            Network.updateInstanceList();
+        } catch (e) {
+            el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable.</p>";
         }
-        el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable. Check Connection.</p>";
     },
     ping: async (url) => {
         try {
             const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 2000);
+            const id = setTimeout(() => controller.abort(), 2500);
             const res = await fetch(`${url}/trending`, { signal: controller.signal });
             clearTimeout(id);
             return res.ok;
         } catch { return false; }
     },
     updateInstanceList: async () => {
-        // Fetch fresh list for next boot
         try {
             const res = await fetch(DYNAMIC_LIST_URL);
             const data = await res.json();
@@ -168,7 +156,7 @@ const Network = {
     }
 };
 
-// --- 4. FEED ENGINE (Batched) ---
+// --- 4. FEED ENGINE ---
 const Feed = {
     loadHome: async () => {
         const subs = DB.getSubs();
@@ -180,14 +168,13 @@ const Feed = {
         el("section-title").textContent = `My Feed (${subs.length})`;
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon">🔄</div><p>Aggregating...</p></div>';
 
-        // CONCURRENCY CONTROL: Process 3 subs at a time to prevent 429 Errors
         try {
             const results = await Utils.processQueue(subs, CONCURRENCY_LIMIT, async (sub) => {
                 try {
                     const res = await fetch(`${App.api}/channels/${sub.id}/videos?page=1`);
                     if(!res.ok) return [];
                     const data = await res.json();
-                    return data.slice(0, 2); // Get top 2 videos
+                    return data.slice(0, 2); 
                 } catch { return []; }
             });
 
@@ -219,12 +206,12 @@ const Feed = {
     }
 };
 
-// --- 5. UI RENDERER (Secure) ---
+// --- 5. UI RENDERER (Lazy DeArrow) ---
 const UI = {
     renderGrid: (data) => {
         App.items = data || [];
         const grid = el("grid-container");
-        grid.textContent = ""; // Clear securely
+        grid.textContent = "";
 
         if (App.items.length === 0) {
             grid.innerHTML = "<p>No results found.</p>";
@@ -237,38 +224,21 @@ const UI = {
             const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
             div.id = `card-${idx}`;
 
-            // Safe DOM Construction
             const img = Utils.create("img", item.type === "channel" ? "c-avatar" : "thumb");
             img.src = (item.videoThumbnails?.[0]?.url || item.authorThumbnails?.[0]?.url || "icon.png");
-            
-            // On error fallback
             img.onerror = function() { this.src = "icon.png"; };
             div.appendChild(img);
 
             if (item.type === "channel") {
                 div.appendChild(Utils.create("h3", null, item.author));
-                if(DB.isSubbed(item.authorId)) {
-                    div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
-                }
+                if(DB.isSubbed(item.authorId)) div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
             } else {
                 const meta = Utils.create("div", "meta");
                 const h3 = Utils.create("h3", null, item.title);
-                h3.id = `title-${idx}`;
+                h3.id = `title-${idx}`; // Hook for DeArrow
                 meta.appendChild(h3);
                 meta.appendChild(Utils.create("p", null, item.author));
                 div.appendChild(meta);
-
-                // DeArrow
-                const vId = item.videoId || item.url?.split("v=")[1];
-                if(vId) {
-                    fetch(`${DEARROW_API}?videoID=${vId}`).then(r=>r.json()).then(d=>{
-                        if(d.titles?.[0]) {
-                            h3.textContent = d.titles[0].title;
-                            App.items[idx].title = d.titles[0].title;
-                        }
-                        if(d.thumbnails?.[0]) img.src = d.thumbnails[0].url;
-                    }).catch(()=>{});
-                }
             }
             grid.appendChild(div);
         });
@@ -280,23 +250,54 @@ const UI = {
         document.querySelectorAll(".focused").forEach(e => e.classList.remove("focused"));
         
         if (App.focus.area === "menu") {
-            const ids = ["menu-home", "menu-subs", "menu-search", "menu-settings"];
-            el(ids[App.menuIdx]).classList.add("focused");
+            el(["menu-home", "menu-subs", "menu-search", "menu-settings"][App.menuIdx]).classList.add("focused");
         } else if (App.focus.area === "grid") {
             const card = el(`card-${App.focus.index}`);
             if (card) {
                 card.classList.add("focused");
                 card.scrollIntoView({block: "center", behavior: "smooth"});
+                
+                // LAZY DEARROW FETCH (On Focus Only)
+                const item = App.items[App.focus.index];
+                if (item && item.type !== "channel" && !item.deArrowChecked) {
+                    UI.fetchDeArrow(item, App.focus.index);
+                }
             }
         } else if (App.focus.area === "search") {
             el("search-input").classList.add("focused");
         } else if (App.focus.area === "settings") {
             el("save-btn").classList.add("focused-btn");
         }
+    },
+    fetchDeArrow: (item, idx) => {
+        item.deArrowChecked = true;
+        const vId = item.videoId || item.url?.split("v=")[1];
+        if(!vId) return;
+
+        // Check Cache
+        if(App.deArrowCache.has(vId)) {
+            const d = App.deArrowCache.get(vId);
+            UI.applyDeArrow(d, idx);
+            return;
+        }
+
+        fetch(`${DEARROW_API}?videoID=${vId}`)
+            .then(r=>r.json())
+            .then(d=>{
+                App.deArrowCache.set(vId, d);
+                UI.applyDeArrow(d, idx);
+            }).catch(()=>{});
+    },
+    applyDeArrow: (d, idx) => {
+        if(d.titles?.[0]) {
+            const elTitle = el(`title-${idx}`);
+            if(elTitle) elTitle.textContent = d.titles[0].title;
+            App.items[idx].title = d.titles[0].title;
+        }
     }
 };
 
-// --- 6. PLAYER ENGINE (Capability Aware) ---
+// --- 6. PLAYER ENGINE ---
 const Player = {
     start: async (item) => {
         App.view = "PLAYER";
@@ -307,7 +308,6 @@ const Player = {
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
 
-        // Load SponsorBlock
         fetch(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`)
             .then(r=>r.ok?r.json():[]).then(s => App.sponsorSegs = s).catch(()=>{});
 
@@ -316,23 +316,14 @@ const Player = {
                 const res = await fetch(`${App.api}/streams/${vId}`);
                 const data = await res.json();
                 
-                // INTELLIGENT STREAM SELECTION
                 const p = el("native-player");
-                let validStream = null;
+                let validStream = data.videoStreams.find(s => s.quality === "1080p" && s.format === "MPEG-4") 
+                               || data.videoStreams.find(s => s.format === "MPEG-4");
 
-                // 1. Try 1080p MP4 (Best compat)
-                validStream = data.videoStreams.find(s => s.quality === "1080p" && s.format === "MPEG-4");
-                
-                // 2. Try any MP4
-                if(!validStream) validStream = data.videoStreams.find(s => s.format === "MPEG-4");
-
-                // 3. Last Resort: Check capability
+                // Capability Check Fallback
                 if(!validStream && data.videoStreams.length > 0) {
                     for(let s of data.videoStreams) {
-                         if(p.canPlayType(s.mimeType) !== "") {
-                             validStream = s;
-                             break;
-                         }
+                         if(p.canPlayType(s.mimeType) !== "") { validStream = s; break; }
                     }
                 }
 
@@ -356,7 +347,9 @@ const Player = {
     setupHUD: (p) => {
         p.ontimeupdate = () => {
             el("progress-fill").style.width = (p.currentTime / p.duration * 100) + "%";
-            // Sponsor Skip (Range Check)
+            el("curr-time").textContent = Utils.formatTime(p.currentTime);
+            el("total-time").textContent = Utils.formatTime(p.duration);
+
             for(const s of App.sponsorSegs) {
                 if(p.currentTime >= s.segment[0] && p.currentTime < s.segment[1]) {
                     p.currentTime = s.segment[1];
@@ -367,10 +360,11 @@ const Player = {
     }
 };
 
-// --- 7. INPUT & NAV ---
+// --- 7. INPUT HANDLER ---
 function setupRemote() {
     document.addEventListener('keydown', (e) => {
-        App.exitCounter = 0; // Reset on any key interaction
+        // FIX 1: HOTEL CALIFORNIA BUG
+        if (e.keyCode !== 10009) App.exitCounter = 0;
 
         if (App.view === "PLAYER") {
             const p = el("native-player");
@@ -442,11 +436,10 @@ function setupRemote() {
                     if(i.authorId) DB.toggleSub(i.authorId, i.author, i.authorThumbnails?.[0]?.url);
                  }
                  break;
-            case 10009: // BACK (Exit Safety)
+            case 10009: // BACK
                 if (App.focus.area === "search") {
                     App.focus.area = "menu";
                     el("search-input").classList.add("hidden");
-                    UI.updateFocus();
                 } else {
                     App.exitCounter++;
                     if(App.exitCounter >= 2) tizen.application.getCurrentApplication().exit();
@@ -458,7 +451,6 @@ function setupRemote() {
     });
 }
 
-// --- ACTIONS ---
 const App.actions = {
     menuSelect: () => {
         if(App.menuIdx===0) Feed.loadHome();
@@ -496,11 +488,9 @@ const HUD = {
 
 // --- BOOT ---
 window.onload = async () => {
-    // Clock
     const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     tick(); setInterval(tick, 60000);
     
-    // Tizen Keys
     if(typeof tizen !== 'undefined') {
         const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Blue', 'Return'];
         k.forEach(key => { try { tizen.tvinputdevice.registerKey(key); } catch(e){} });
