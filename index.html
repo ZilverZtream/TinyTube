@@ -10,28 +10,16 @@
 
     <div id="sidebar">
         <div class="brand">TT</div>
-        
-        <div class="menu-item focused" id="menu-home">
-            <span class="icon">🏠</span> <span class="label">Home</span>
-        </div>
-        <div class="menu-item" id="menu-subs">
-            <span class="icon">📚</span> <span class="label">My Subs</span>
-        </div>
-        <div class="menu-item" id="menu-search">
-            <span class="icon">🔍</span> <span class="label">Search</span>
-        </div>
-        <div class="menu-item" id="menu-settings">
-            <span class="icon">⚙️</span> <span class="label">Settings</span>
-        </div>
-
+        <div class="menu-item focused" id="menu-home"><span class="icon">🏠</span> <span class="label">Home</span></div>
+        <div class="menu-item" id="menu-subs"><span class="icon">📚</span> <span class="label">My Subs</span></div>
+        <div class="menu-item" id="menu-search"><span class="icon">🔍</span> <span class="label">Search</span></div>
+        <div class="menu-item" id="menu-settings"><span class="icon">⚙️</span> <span class="label">Settings</span></div>
         <div class="spacer"></div>
-        
         <div id="profile-display">
             <div id="p-icon">👤</div>
-            <div id="p-name">Loading...</div>
+            <div id="p-name">...</div>
         </div>
-        
-        <div id="backend-status">System Boot...</div>
+        <div id="backend-status">Booting...</div>
     </div>
 
     <div id="main-content">
@@ -39,16 +27,13 @@
             <h2 id="section-title">Home</h2>
             <div id="clock">00:00</div>
         </div>
-
-        <input id="search-input" type="text" placeholder="Search Videos or Channels..." class="hidden" />
-
+        <input id="search-input" type="text" placeholder="Search..." class="hidden" />
         <div id="grid-container"></div>
     </div>
 
     <div id="player-layer" class="hidden">
         <video id="native-player" width="100%" height="100%"></video>
         <div id="enforcement-container"></div>
-        
         <div id="player-hud">
             <h1 id="player-title"></h1>
             <div id="player-time-row">
@@ -57,47 +42,35 @@
                 <span id="total-time">0:00</span>
             </div>
             <div id="hud-badges">
-                <span id="sub-badge" class="badge">SUBSCRIBE (Blue)</span>
+                <span id="sub-badge" class="badge">SUBSCRIBE</span>
                 <span id="sponsor-badge" class="badge hidden">SPONSOR SKIP</span>
             </div>
             <div id="controls-hint">
-                <span style="color:#2196F3">■ Sub</span> &nbsp;
-                <span style="color:#F44336">■ Mode</span>
+                <span style="color:#2196F3">■ Sub</span> &nbsp; <span style="color:#F44336">■ Mode</span>
             </div>
         </div>
     </div>
 
     <div id="settings-overlay" class="hidden">
         <div class="modal">
-            <h2>System Settings</h2>
-            
+            <h2>Settings</h2>
             <div class="setting-group">
-                <label>Active Profile</label>
+                <label>Profile</label>
                 <div class="row">
                     <b id="modal-profile-id" style="font-size:24px; margin-right:15px;">#1</b>
-                    <button onclick="App.actions.switchProfile()">SWITCH PROFILE</button>
+                    <button onclick="App.actions.switchProfile()">SWITCH</button>
                 </div>
             </div>
-
-            <div class="setting-group">
-                <label>Profile Name</label>
-                <input id="profile-name-input" placeholder="Enter Name" />
-            </div>
-
-            <div class="setting-group">
-                <label>Custom API (Optional)</label>
-                <input id="api-input" placeholder="https://..." />
-            </div>
-
+            <div class="setting-group"><label>Rename Profile</label><input id="profile-name-input" /></div>
+            <div class="setting-group"><label>Custom API</label><input id="api-input" placeholder="https://..." /></div>
             <div class="button-row">
-                <button id="save-btn" class="focused-btn">SAVE & REBOOT</button>
+                <button id="save-btn" class="focused-btn">SAVE</button>
                 <button id="cancel-btn">CANCEL</button>
             </div>
         </div>
     </div>
 
     <div id="toast" class="hidden">Notification</div>
-
     <script src="main.js"></script>
 </body>
 </html>
