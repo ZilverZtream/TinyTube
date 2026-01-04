@@ -38,7 +38,7 @@
             <h1 id="player-title"></h1>
             <div id="player-time-row">
                 <span id="curr-time">0:00</span>
-                <div id="player-progress"><div id="progress-fill"></div></div>
+                <div id="progress-bar"><div id="progress-fill"></div></div>
                 <span id="total-time">0:00</span>
             </div>
             <div id="hud-badges">
@@ -65,7 +65,7 @@
             <div class="setting-group"><label>Custom API</label><input id="api-input" placeholder="https://..." /></div>
             <div class="button-row">
                 <button id="save-btn" class="focused-btn">SAVE</button>
-                <button id="cancel-btn">CANCEL</button>
+                <button id="cancel-btn" onclick="el('settings-overlay').classList.add('hidden'); App.view='BROWSE';">CANCEL</button>
             </div>
         </div>
     </div>
