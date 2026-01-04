@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css" />
+    <title>TinyTube Pro</title>
+</head>
+<body>
+
+    <div id="sidebar">
+        <div class="brand">TT</div>
+        
+        <div class="menu-item focused" id="menu-home">
+            <span class="icon">🏠</span> <span class="label">Home</span>
+        </div>
+        <div class="menu-item" id="menu-subs">
+            <span class="icon">📚</span> <span class="label">My Subs</span>
+        </div>
+        <div class="menu-item" id="menu-search">
+            <span class="icon">🔍</span> <span class="label">Search</span>
+        </div>
+        <div class="menu-item" id="menu-settings">
+            <span class="icon">⚙️</span> <span class="label">Settings</span>
+        </div>
+
+        <div class="spacer"></div>
+        
+        <div id="profile-display">
+            <div id="p-icon">👤</div>
+            <div id="p-name">Loading...</div>
+        </div>
+        
+        <div id="backend-status">System Boot...</div>
+    </div>
+
+    <div id="main-content">
+        <div id="header-row">
+            <h2 id="section-title">Home</h2>
+            <div id="clock">00:00</div>
+        </div>
+
+        <input id="search-input" type="text" placeholder="Search Videos or Channels..." class="hidden" />
+
+        <div id="grid-container">
+            <div class="loading-spinner">
+                <div class="spinner-icon">🔄</div>
+                <p>Connecting to Mesh Network...</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="player-layer" class="hidden">
+        <video id="native-player" width="100%" height="100%"></video>
+        <div id="enforcement-container"></div>
+        
+        <div id="player-hud">
+            <h1 id="player-title"></h1>
+            <div id="player-progress"><div id="progress-fill"></div></div>
+            <div id="hud-badges">
+                <span id="sub-badge" class="badge">SUBSCRIBE (Blue)</span>
+                <span id="sponsor-badge" class="badge hidden">SPONSOR SKIP</span>
+            </div>
+            <div id="controls-hint">
+                <span style="color:#2196F3">■ Sub</span> &nbsp;
+                <span style="color:#F44336">■ Mode</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-overlay" class="hidden">
+        <div class="modal">
+            <h2>System Settings</h2>
+            
+            <div class="setting-group">
+                <label>Active Profile</label>
+                <div class="row">
+                    <b id="modal-profile-id" style="font-size:24px; margin-right:15px;">#1</b>
+                    <button onclick="App.actions.switchProfile()">SWITCH PROFILE</button>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <label>Profile Name</label>
+                <input id="profile-name-input" placeholder="Enter Name" />
+            </div>
+
+            <div class="setting-group">
+                <label>Custom API (Optional)</label>
+                <input id="api-input" placeholder="https://..." />
+            </div>
+
+            <div class="button-row">
+                <button id="save-btn" class="focused-btn">SAVE & REBOOT</button>
+                <button id="cancel-btn">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
