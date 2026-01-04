@@ -1,5 +1,9 @@
 /**
- * TinyTube Pro v6.0.0 (Tizen 4.0+ Optimized)
+ * TinyTube Pro v6.0.1 (Tizen 4.0+ Optimized)
+ *
+ * v6.0.1 Changes:
+ * - FIX: Request deduplication now actually used in Feed.loadHome, Feed.fetch, and DeArrow
+ * - FIX: Removed unused variable in Utils.processQueue
  *
  * v6.0.0 Changes:
  * - CRITICAL FIX: SponsorBlock no longer blocks video playback (fire-and-forget)
@@ -175,7 +179,6 @@ const Utils = {
     },
     processQueue: async (items, limit, asyncFn) => {
         let results = new Array(items.length);
-        let currentIdx = 0;
         const executing = [];
 
         for (let i = 0; i < items.length; i++) {
@@ -408,7 +411,7 @@ const Feed = {
         try {
             const results = await Utils.processQueue(subs, CONCURRENCY_LIMIT, async (sub) => {
                 try {
-                    const res = await Utils.fetchWithTimeout(`${App.api}/channels/${sub.id}/videos?page=1`);
+                    const res = await Utils.fetchDedup(`${App.api}/channels/${sub.id}/videos?page=1`);
                     if (!res.ok) return [];
                     const data = await res.json();
                     return data.slice(0, 2);
@@ -419,7 +422,7 @@ const Feed = {
 
             if (feed.length < 10) {
                 try {
-                    const tr = await (await Utils.fetchWithTimeout(`${App.api}/trending`)).json();
+                    const tr = await (await Utils.fetchDedup(`${App.api}/trending`)).json();
                     if (Array.isArray(tr)) feed.push(...tr.slice(0, 10));
                 } catch (e) {}
             }
@@ -432,7 +435,7 @@ const Feed = {
         if (!App.api) return;
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div></div>';
         try {
-            const res = await Utils.fetchWithTimeout(`${App.api}${endpoint}`);
+            const res = await Utils.fetchDedup(`${App.api}${endpoint}`);
             if (!res.ok) throw new Error();
             const data = await res.json();
             UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
@@ -590,7 +593,7 @@ const UI = {
         if (App.pendingDeArrow[vId]) clearTimeout(App.pendingDeArrow[vId]);
 
         App.pendingDeArrow[vId] = setTimeout(() => {
-            Utils.fetchWithTimeout(`${DEARROW_API}?videoID=${vId}`, {}, 5000)
+            Utils.fetchDedup(`${DEARROW_API}?videoID=${vId}`, {}, 5000)
                 .then(r => r.json())
                 .then(d => {
                     App.deArrowCache.set(vId, d);
