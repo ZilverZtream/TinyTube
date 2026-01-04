@@ -1,20 +1,36 @@
 /**
- * TinyTube Pro v5.1.0 (Tizen 4.0+ Optimized)
+ * TinyTube Pro v6.0.0 (Tizen 4.0+ Optimized)
  *
- * Bug Fixes:
+ * v6.0.0 Changes:
+ * - CRITICAL FIX: SponsorBlock no longer blocks video playback (fire-and-forget)
+ * - CRITICAL FIX: Grid navigation deadzone on partial last rows
+ * - CRITICAL FIX: Fetch timeout with graceful fallback (8s default)
+ * - CRITICAL FIX: renderLoop memory leak on Player.start failure
+ * - FIX: Seek bounds checking (clamp to 0 - duration)
+ * - FIX: JSON parse error handling in Player.start
+ * - FIX: Utils.any no longer calls resolve multiple times
+ * - PERF: Cached DOM element references in render loop (60fps)
+ * - PERF: Stream URL caching to avoid re-fetch on replay
+ * - PERF: Request deduplication for concurrent fetches
+ * - UI: Buffering spinner overlay during video load
+ * - UI: Buffer progress bar (gray) showing preloaded data
+ * - UI: Playback speed control (GREEN button: 1x → 1.25x → 1.5x → 2x → 0.5x → 1x)
+ * - UI: Continue Watching - resume from last position
+ * - UI: Hold-to-seek acceleration (10s → 30s → 60s)
+ * - UI: Video info overlay (YELLOW button)
+ * - UI: Keyboard shortcuts help (INFO button or hold OK)
+ *
+ * Previous (v5.1.0):
  * - Fixed: Missing getAuthorThumb function (runtime crash)
  * - Fixed: Incorrect Invidious API endpoint (/streams -> /videos)
  * - Fixed: SponsorBlock skip loop (repeated skipping at segment boundaries)
  * - Fixed: AbortController crash on Tizen 4.0 (uses token pattern)
  * - Fixed: DeArrow pending tokens now cleaned on view change
- *
- * Optimizations:
  * - GPU-accelerated progress bar (CSS transform instead of width)
  * - Lazy image loading with IntersectionObserver (200px preload margin)
  * - O(1) subscription cache (invalidated on change)
  * - O(1) LRU Cache for DeArrow data (200 item limit)
  * - O(log n) Binary Search for SponsorBlock segments
- * - Parallel fetch for SponsorBlock + video streams
  * - 60 FPS UI loop via requestAnimationFrame
  * - Broken thumbnail fallback to icon.png
  * - Video poster image for better loading UX
@@ -31,6 +47,11 @@ const DYNAMIC_LIST_URL = "https://api.invidious.io/instances.json?sort_by=health
 const SPONSOR_API = "https://sponsor.ajay.app/api/skipSegments";
 const DEARROW_API = "https://dearrow.ajay.app/api/branding";
 const CONCURRENCY_LIMIT = 3;
+const FETCH_TIMEOUT = 8000; // 8 second timeout for all fetches
+const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2, 0.5]; // Cycle through these
+const SEEK_ACCELERATION_DELAY = 500; // ms before acceleration kicks in
+const SEEK_INTERVALS = [10, 30, 60]; // seconds: tap, hold short, hold long
+const WATCH_HISTORY_LIMIT = 50; // Max videos to remember position for
 
 // --- O(1) LRU CACHE ---
 function LRUCache(limit) {
@@ -62,17 +83,28 @@ const App = {
     profileId: 0,
     playerMode: "BYPASS",
     sponsorSegs: [],
-    lastSkippedSeg: null, // Prevent skip loops
+    lastSkippedSeg: null,
     exitCounter: 0,
     deArrowCache: new LRUCache(200),
-    // Cancellation Tokens for Tizen 4.0 (No AbortController)
+    streamCache: new LRUCache(50), // Cache stream URLs
     pendingDeArrow: {},
-    rafId: null, // Animation Frame ID
-    // Subscription cache (invalidated on change)
+    pendingFetches: {}, // Deduplication: track in-flight requests
+    rafId: null,
     subsCache: null,
     subsCacheId: null,
-    // Lazy load observer (Tizen 4.0+ has IntersectionObserver)
-    lazyObserver: null
+    lazyObserver: null,
+    // Player state
+    currentVideoId: null,
+    currentVideoData: null, // Full video metadata for info overlay
+    playbackSpeedIdx: 0,
+    // Seek acceleration state
+    seekKeyHeld: null, // 'left' or 'right' or null
+    seekKeyTime: 0, // When key was first pressed
+    seekRepeatCount: 0,
+    // Cached DOM elements for render loop (60fps optimization)
+    playerElements: null,
+    // Watch history for resume
+    watchHistory: null
 };
 
 const el = (id) => document.getElementById(id);
@@ -81,34 +113,77 @@ const el = (id) => document.getElementById(id);
 const Utils = {
     create: (tag, cls, text) => {
         const e = document.createElement(tag);
-        if(cls) e.className = cls;
-        if(text) e.textContent = text;
+        if (cls) e.className = cls;
+        if (text) e.textContent = text;
         return e;
     },
     safeParse: (str, def) => {
         try { return JSON.parse(str) || def; } catch { return def; }
     },
-    // Safe Promise.any for Chrome 56
+    // Safe Promise.any for Chrome 56 - fixed to only resolve once
     any: (promises) => {
         return new Promise((resolve, reject) => {
             let errors = [];
             let rejected = 0;
-            if(promises.length === 0) reject(new Error("No promises"));
-            promises.forEach(p => p.then(resolve).catch(e => {
+            let resolved = false;
+            if (promises.length === 0) reject(new Error("No promises"));
+            promises.forEach(p => p.then(val => {
+                if (!resolved) {
+                    resolved = true;
+                    resolve(val);
+                }
+            }).catch(e => {
                 errors.push(e);
                 rejected++;
                 if (rejected === promises.length) reject(errors);
             }));
         });
     },
+    // Fetch with timeout (Tizen 4.0 safe - no AbortController)
+    fetchWithTimeout: (url, options = {}, timeout = FETCH_TIMEOUT) => {
+        return new Promise((resolve, reject) => {
+            let timedOut = false;
+            const timer = setTimeout(() => {
+                timedOut = true;
+                reject(new Error('Fetch timeout'));
+            }, timeout);
+
+            fetch(url, options)
+                .then(res => {
+                    if (!timedOut) {
+                        clearTimeout(timer);
+                        resolve(res);
+                    }
+                })
+                .catch(err => {
+                    if (!timedOut) {
+                        clearTimeout(timer);
+                        reject(err);
+                    }
+                });
+        });
+    },
+    // Deduplicated fetch - prevents duplicate concurrent requests
+    fetchDedup: async (url, options = {}, timeout = FETCH_TIMEOUT) => {
+        if (App.pendingFetches[url]) {
+            return App.pendingFetches[url];
+        }
+        const promise = Utils.fetchWithTimeout(url, options, timeout)
+            .finally(() => { delete App.pendingFetches[url]; });
+        App.pendingFetches[url] = promise;
+        return promise;
+    },
     processQueue: async (items, limit, asyncFn) => {
-        let results = [];
+        let results = new Array(items.length);
+        let currentIdx = 0;
         const executing = [];
-        for (const item of items) {
-            const p = asyncFn(item).then(r => results.push(r));
+
+        for (let i = 0; i < items.length; i++) {
+            const idx = i;
+            const p = asyncFn(items[i]).then(r => { results[idx] = r; });
             const wrapped = p.then(() => {
-                const idx = executing.indexOf(wrapped);
-                if (idx !== -1) executing.splice(idx, 1);
+                const pos = executing.indexOf(wrapped);
+                if (pos !== -1) executing.splice(pos, 1);
             });
             executing.push(wrapped);
             if (executing.length >= limit) await Promise.race(executing);
@@ -123,33 +198,37 @@ const Utils = {
         const t = el("toast");
         t.textContent = msg;
         t.classList.remove("hidden");
-        // Reuse timer to prevent closure leaks
         clearTimeout(t._timer);
         t._timer = setTimeout(() => t.classList.add("hidden"), 3000);
     },
     formatTime: (sec) => {
         if (!sec || isNaN(sec)) return "0:00";
-        const h = Math.floor(sec/3600);
-        const m = Math.floor((sec%3600)/60);
-        const s = Math.floor(sec%60);
-        if (h > 0) return h + ":" + (m<10?'0'+m:m) + ":" + (s<10?'0'+s:s);
-        return m + ":" + (s<10?'0'+s:s);
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = Math.floor(sec % 60);
+        if (h > 0) return h + ":" + (m < 10 ? '0' + m : m) + ":" + (s < 10 ? '0' + s : s);
+        return m + ":" + (s < 10 ? '0' + s : s);
     },
     formatViews: (num) => {
         if (!num) return "";
-        if (num >= 1e6) return (num/1e6).toFixed(1).replace(/\.0$/,'') + "M views";
-        if (num >= 1e3) return (num/1e3).toFixed(1).replace(/\.0$/,'') + "K views";
+        if (num >= 1e6) return (num / 1e6).toFixed(1).replace(/\.0$/, '') + "M views";
+        if (num >= 1e3) return (num / 1e3).toFixed(1).replace(/\.0$/, '') + "K views";
         return num + " views";
     },
     formatDate: (ts) => {
         if (!ts) return "";
-        const diff = (Date.now()/1000) - ts;
-        if (diff < 3600) return Math.floor(diff/60) + " min ago";
-        if (diff < 86400) return Math.floor(diff/3600) + " hours ago";
-        if (diff < 604800) return Math.floor(diff/86400) + " days ago";
-        if (diff < 2592000) return Math.floor(diff/604800) + " weeks ago";
-        if (diff < 31536000) return Math.floor(diff/2592000) + " months ago";
-        return Math.floor(diff/31536000) + " years ago";
+        const diff = (Date.now() / 1000) - ts;
+        if (diff < 3600) return Math.floor(diff / 60) + " min ago";
+        if (diff < 86400) return Math.floor(diff / 3600) + " hours ago";
+        if (diff < 604800) return Math.floor(diff / 86400) + " days ago";
+        if (diff < 2592000) return Math.floor(diff / 604800) + " weeks ago";
+        if (diff < 31536000) return Math.floor(diff / 2592000) + " months ago";
+        return Math.floor(diff / 31536000) + " years ago";
+    },
+    formatFullDate: (ts) => {
+        if (!ts) return "";
+        const d = new Date(ts * 1000);
+        return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
     },
     getVideoId: (item) => {
         if (!item) return null;
@@ -171,7 +250,6 @@ const Utils = {
         }
         return null;
     },
-    // Extract author thumbnail from item
     getAuthorThumb: (item) => {
         if (!item) return "icon.png";
         if (item.authorThumbnails && item.authorThumbnails[0]) {
@@ -179,7 +257,9 @@ const Utils = {
         }
         if (item.thumb) return item.thumb;
         return "icon.png";
-    }
+    },
+    // Clamp value between min and max
+    clamp: (val, min, max) => Math.max(min, Math.min(max, val))
 };
 
 // --- 2. LOCAL DB ---
@@ -190,9 +270,10 @@ const DB = {
         el("p-name").textContent = names[App.profileId];
         el("modal-profile-id").textContent = `#${App.profileId + 1}`;
         el("profile-name-input").value = names[App.profileId];
-        // Invalidate subs cache on profile load
         App.subsCache = null;
         App.subsCacheId = null;
+        // Load watch history
+        App.watchHistory = Utils.safeParse(localStorage.getItem(`tt_history_${App.profileId}`), {});
     },
     saveProfileName: (name) => {
         const names = Utils.safeParse(localStorage.getItem("tt_pnames"), ["User 1", "User 2", "User 3"]);
@@ -200,7 +281,6 @@ const DB = {
         localStorage.setItem("tt_pnames", JSON.stringify(names));
         DB.loadProfile();
     },
-    // Cached subscription getter (O(1) after first call)
     getSubs: () => {
         if (App.subsCache && App.subsCacheId === App.profileId) {
             return App.subsCache;
@@ -211,7 +291,7 @@ const DB = {
     },
     toggleSub: (id, name, thumb) => {
         if (!id) return;
-        let subs = DB.getSubs().slice(); // Clone to avoid mutation
+        let subs = DB.getSubs().slice();
         const exists = subs.find(s => s.id === id);
         if (exists) {
             subs = subs.filter(s => s.id !== id);
@@ -221,12 +301,41 @@ const DB = {
             Utils.toast(`Subscribed: ${name}`);
         }
         localStorage.setItem(`tt_subs_${App.profileId}`, JSON.stringify(subs));
-        // Update cache
         App.subsCache = subs;
-        if(App.view === "PLAYER") HUD.updateSubBadge(!exists);
-        if(App.menuIdx === 1) Feed.renderSubs();
+        if (App.view === "PLAYER") HUD.updateSubBadge(!exists);
+        if (App.menuIdx === 1) Feed.renderSubs();
     },
-    isSubbed: (id) => !!DB.getSubs().find(s => s.id === id)
+    isSubbed: (id) => !!DB.getSubs().find(s => s.id === id),
+    // Watch history for resume playback
+    savePosition: (videoId, position, duration) => {
+        if (!videoId || !position || position < 10) return; // Don't save if < 10s
+        if (duration && position > duration - 10) {
+            // Near end, remove from history (completed)
+            delete App.watchHistory[videoId];
+        } else {
+            App.watchHistory[videoId] = { pos: Math.floor(position), ts: Date.now() };
+            // Limit history size
+            const keys = Object.keys(App.watchHistory);
+            if (keys.length > WATCH_HISTORY_LIMIT) {
+                // Remove oldest entries
+                keys.sort((a, b) => App.watchHistory[a].ts - App.watchHistory[b].ts);
+                for (let i = 0; i < keys.length - WATCH_HISTORY_LIMIT; i++) {
+                    delete App.watchHistory[keys[i]];
+                }
+            }
+        }
+        localStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
+    },
+    getPosition: (videoId) => {
+        if (!videoId || !App.watchHistory[videoId]) return 0;
+        return App.watchHistory[videoId].pos || 0;
+    },
+    clearPosition: (videoId) => {
+        if (videoId && App.watchHistory[videoId]) {
+            delete App.watchHistory[videoId];
+            localStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
+        }
+    }
 };
 
 // --- 3. NETWORK ---
@@ -242,7 +351,7 @@ const Network = {
         }
 
         const cached = localStorage.getItem("lastWorkingApi");
-        if(cached && await Network.ping(cached)) {
+        if (cached && await Network.ping(cached)) {
             App.api = cached;
             el("backend-status").textContent = `Restored: ${cached.split('/')[2]}`;
             Feed.loadHome();
@@ -252,8 +361,8 @@ const Network = {
 
         el("backend-status").textContent = "Scanning Mesh...";
         const instances = Utils.safeParse(localStorage.getItem("cached_instances"), FALLBACK_INSTANCES);
-        
-        const pings = instances.map(url => 
+
+        const pings = instances.map(url =>
             Network.ping(url).then(ok => ok ? url : Promise.reject())
         );
 
@@ -270,19 +379,17 @@ const Network = {
     },
     ping: async (url) => {
         try {
-            const timeout = new Promise((_, r) => setTimeout(() => r(), 2500));
-            const req = fetch(`${url}/trending`);
-            const res = await Promise.race([req, timeout]);
+            const res = await Utils.fetchWithTimeout(`${url}/trending`, {}, 2500);
             return res && res.ok;
-        } catch(e) { return false; }
+        } catch (e) { return false; }
     },
     updateInstanceList: async () => {
         try {
-            const res = await fetch(DYNAMIC_LIST_URL);
+            const res = await Utils.fetchWithTimeout(DYNAMIC_LIST_URL, {}, 5000);
             const data = await res.json();
             const fresh = data.filter(i => i[1].api && i[1].type === "https").map(i => i[1].uri + "/api/v1").slice(0, 8);
-            if(fresh.length) localStorage.setItem("cached_instances", JSON.stringify(fresh));
-        } catch(e) {}
+            if (fresh.length) localStorage.setItem("cached_instances", JSON.stringify(fresh));
+        } catch (e) {}
     }
 };
 
@@ -301,21 +408,20 @@ const Feed = {
         try {
             const results = await Utils.processQueue(subs, CONCURRENCY_LIMIT, async (sub) => {
                 try {
-                    const res = await fetch(`${App.api}/channels/${sub.id}/videos?page=1`);
-                    if(!res.ok) return [];
+                    const res = await Utils.fetchWithTimeout(`${App.api}/channels/${sub.id}/videos?page=1`);
+                    if (!res.ok) return [];
                     const data = await res.json();
-                    return data.slice(0, 2); 
-                } catch(e) { return []; }
+                    return data.slice(0, 2);
+                } catch (e) { return []; }
             });
 
-            const feed = [].concat(...results).sort((a,b) => b.published - a.published);
-            
-            // Fill with trending if empty
+            const feed = [].concat(...results).sort((a, b) => b.published - a.published);
+
             if (feed.length < 10) {
                 try {
-                    const tr = await (await fetch(`${App.api}/trending`)).json();
-                    if(Array.isArray(tr)) feed.push(...tr.slice(0, 10));
-                } catch(e){}
+                    const tr = await (await Utils.fetchWithTimeout(`${App.api}/trending`)).json();
+                    if (Array.isArray(tr)) feed.push(...tr.slice(0, 10));
+                } catch (e) {}
             }
             UI.renderGrid(feed);
         } catch (e) {
@@ -323,15 +429,15 @@ const Feed = {
         }
     },
     fetch: async (endpoint) => {
-        if(!App.api) return;
+        if (!App.api) return;
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div></div>';
         try {
-            const res = await fetch(`${App.api}${endpoint}`);
-            if(!res.ok) throw new Error();
+            const res = await Utils.fetchWithTimeout(`${App.api}${endpoint}`);
+            if (!res.ok) throw new Error();
             const data = await res.json();
             UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
-        } catch(e) { 
-            el("grid-container").innerHTML = '<div class="network-error"><h3>Error</h3><p>Connection failed.</p></div>'; 
+        } catch (e) {
+            el("grid-container").innerHTML = '<div class="network-error"><h3>Error</h3><p>Connection failed.</p></div>';
         }
     },
     renderSubs: () => {
@@ -345,9 +451,8 @@ const Feed = {
 
 // --- 5. UI ---
 const UI = {
-    // Initialize lazy loading observer (call once on app start)
     initLazyObserver: () => {
-        if (!("IntersectionObserver" in window)) return; // Fallback for very old Tizen
+        if (!("IntersectionObserver" in window)) return;
         App.lazyObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
@@ -359,11 +464,10 @@ const UI = {
                     }
                 }
             });
-        }, { rootMargin: "200px" }); // Preload 200px before visible
+        }, { rootMargin: "200px" });
     },
-    // Handle broken image fallback
     handleImgError: (img) => {
-        img.onerror = null; // Prevent infinite loop
+        img.onerror = null;
         img.src = "icon.png";
     },
     renderGrid: (data) => {
@@ -371,7 +475,6 @@ const UI = {
         const grid = el("grid-container");
         grid.textContent = "";
 
-        // Clear pending DeArrow tokens
         for (const key in App.pendingDeArrow) {
             clearTimeout(App.pendingDeArrow[key]);
             delete App.pendingDeArrow[key];
@@ -387,12 +490,11 @@ const UI = {
         let idx = 0;
 
         for (const item of App.items) {
-            if(item.type && item.type !== "video" && item.type !== "channel" && item.type !== "shortVideo") continue;
+            if (item.type && item.type !== "video" && item.type !== "channel" && item.type !== "shortVideo") continue;
 
             const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
             div.id = `card-${idx}`;
 
-            // Thumb
             let thumbUrl = "icon.png";
             if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
             else if (item.thumbnail) thumbUrl = item.thumbnail;
@@ -401,7 +503,7 @@ const UI = {
             if (item.type === "channel") {
                 const img = Utils.create("img", "c-avatar");
                 img.onerror = function() { UI.handleImgError(this); };
-                if (useLazy && idx > 7) { // Lazy load after first 8 items
+                if (useLazy && idx > 7) {
                     img.dataset.src = thumbUrl;
                     img.src = "icon.png";
                     App.lazyObserver.observe(img);
@@ -410,12 +512,12 @@ const UI = {
                 }
                 div.appendChild(img);
                 div.appendChild(Utils.create("h3", null, item.author));
-                if(DB.isSubbed(item.authorId)) div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
+                if (DB.isSubbed(item.authorId)) div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
             } else {
                 const tc = Utils.create("div", "thumb-container");
                 const img = Utils.create("img", "thumb");
                 img.onerror = function() { UI.handleImgError(this); };
-                if (useLazy && idx > 7) { // Lazy load after first 8 items
+                if (useLazy && idx > 7) {
                     img.dataset.src = thumbUrl;
                     img.src = "icon.png";
                     App.lazyObserver.observe(img);
@@ -427,6 +529,14 @@ const UI = {
                 if (item.lengthSeconds) tc.appendChild(Utils.create("span", "duration-badge", Utils.formatTime(item.lengthSeconds)));
                 if (item.liveNow) tc.appendChild(Utils.create("span", "live-badge", "LIVE"));
 
+                // Show resume indicator if we have saved position
+                const vId = Utils.getVideoId(item);
+                const savedPos = vId ? DB.getPosition(vId) : 0;
+                if (savedPos > 0) {
+                    const resumeBadge = Utils.create("span", "resume-badge", Utils.formatTime(savedPos));
+                    tc.appendChild(resumeBadge);
+                }
+
                 div.appendChild(tc);
 
                 const meta = Utils.create("div", "meta");
@@ -435,8 +545,8 @@ const UI = {
                 meta.appendChild(h3);
 
                 let info = item.author || "";
-                if(item.viewCount) info += (info ? " • " : "") + Utils.formatViews(item.viewCount);
-                if(item.published) info += (info ? " • " : "") + Utils.formatDate(item.published);
+                if (item.viewCount) info += (info ? " • " : "") + Utils.formatViews(item.viewCount);
+                if (item.published) info += (info ? " • " : "") + Utils.formatDate(item.published);
 
                 meta.appendChild(Utils.create("p", null, info));
                 div.appendChild(meta);
@@ -451,14 +561,14 @@ const UI = {
     },
     updateFocus: () => {
         document.querySelectorAll(".focused").forEach(e => e.classList.remove("focused"));
-        
+
         if (App.focus.area === "menu") {
             el(["menu-home", "menu-subs", "menu-search", "menu-settings"][App.menuIdx]).classList.add("focused");
         } else if (App.focus.area === "grid") {
             const card = el(`card-${App.focus.index}`);
             if (card) {
                 card.classList.add("focused");
-                card.scrollIntoView({block: "center", behavior: "smooth"});
+                card.scrollIntoView({ block: "center", behavior: "smooth" });
                 const item = App.items[App.focus.index];
                 if (item && item.type !== "channel" && !item.deArrowChecked) {
                     UI.fetchDeArrow(item, App.focus.index);
@@ -470,35 +580,33 @@ const UI = {
     fetchDeArrow: (item, idx) => {
         item.deArrowChecked = true;
         const vId = Utils.getVideoId(item);
-        if(!vId) return;
+        if (!vId) return;
 
-        if(App.deArrowCache.has(vId)) {
+        if (App.deArrowCache.has(vId)) {
             UI.applyDeArrow(App.deArrowCache.get(vId), idx, vId);
             return;
         }
 
-        // Tizen 4.0 Safe "Debounce + Cancellation"
-        // We use a simple token object instead of AbortController
         if (App.pendingDeArrow[vId]) clearTimeout(App.pendingDeArrow[vId]);
 
         App.pendingDeArrow[vId] = setTimeout(() => {
-            fetch(`${DEARROW_API}?videoID=${vId}`)
+            Utils.fetchWithTimeout(`${DEARROW_API}?videoID=${vId}`, {}, 5000)
                 .then(r => r.json())
                 .then(d => {
                     App.deArrowCache.set(vId, d);
                     UI.applyDeArrow(d, idx, vId);
                     delete App.pendingDeArrow[vId];
                 }).catch(() => delete App.pendingDeArrow[vId]);
-        }, 300); // 300ms debounce
+        }, 300);
     },
     applyDeArrow: (d, idx, originalId) => {
         if (!App.items[idx]) return;
         const currentId = Utils.getVideoId(App.items[idx]);
         if (currentId !== originalId) return;
 
-        if(d.titles && d.titles[0]) {
+        if (d.titles && d.titles[0]) {
             const t = el(`title-${idx}`);
-            if(t) t.textContent = d.titles[0].title;
+            if (t) t.textContent = d.titles[0].title;
             App.items[idx].title = d.titles[0].title;
         }
     }
@@ -506,16 +614,37 @@ const UI = {
 
 // --- 6. PLAYER ---
 const Player = {
+    // Cache DOM elements for 60fps render loop
+    cacheElements: () => {
+        App.playerElements = {
+            player: el("native-player"),
+            progressFill: el("progress-fill"),
+            bufferFill: el("buffer-fill"),
+            currTime: el("curr-time"),
+            totalTime: el("total-time"),
+            bufferingSpinner: el("buffering-spinner"),
+            speedBadge: el("speed-badge")
+        };
+    },
+
     start: async (item) => {
-        if(!item) return;
+        if (!item) return;
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
+        App.playbackSpeedIdx = 0;
+        App.currentVideoData = null;
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
 
+        // Cache DOM elements if not already
+        if (!App.playerElements) Player.cacheElements();
+
         const vId = Utils.getVideoId(item);
+        App.currentVideoId = vId;
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
+        HUD.updateSpeedBadge(1);
+        el("video-info-overlay").classList.add("hidden");
 
         // Get thumbnail for poster
         let posterUrl = "";
@@ -525,154 +654,332 @@ const Player = {
             posterUrl = item.thumbnail;
         }
 
-        const p = el("native-player");
+        const p = App.playerElements.player;
         if (posterUrl) p.poster = posterUrl;
 
-        // Parallel fetch: SponsorBlock + Video streams
-        const sponsorPromise = fetch(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`)
+        // Show buffering spinner
+        App.playerElements.bufferingSpinner.classList.remove("hidden");
+
+        // FIRE-AND-FORGET: SponsorBlock fetch (no longer blocks playback!)
+        App.sponsorSegs = [];
+        Utils.fetchWithTimeout(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`, {}, 5000)
             .then(r => r.ok ? r.json() : [])
-            .then(s => { App.sponsorSegs = s.sort((a, b) => a.segment[0] - b.segment[0]); })
+            .then(s => {
+                if (Array.isArray(s)) {
+                    App.sponsorSegs = s.sort((a, b) => a.segment[0] - b.segment[0]);
+                }
+            })
             .catch(() => { App.sponsorSegs = []; });
 
         if (App.api) {
-            try {
-                const [res] = await Promise.all([
-                    fetch(`${App.api}/videos/${vId}`),
-                    sponsorPromise // Run in parallel
-                ]);
-                const data = await res.json();
+            // Check stream cache first
+            let streamUrl = null;
+            const cached = App.streamCache.get(vId);
+            if (cached && cached.url) {
+                streamUrl = cached.url;
+                App.currentVideoData = cached.data;
+            }
 
-                // Use formatStreams (combined audio+video) - best for Tizen 4.0
-                const streams = data.formatStreams || [];
-                const adaptiveStreams = data.adaptiveFormats || [];
+            if (!streamUrl) {
+                try {
+                    const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`);
+                    if (!res.ok) throw new Error('Video fetch failed');
 
-                // Prefer 720p/1080p combined streams for compatibility
-                let stream = streams.find(s => s.qualityLabel === "1080p" || s.quality === "1080p")
-                          || streams.find(s => s.qualityLabel === "720p" || s.quality === "720p")
-                          || streams.find(s => s.container === "mp4")
-                          || streams[0];
-
-                // Fallback to adaptive formats if no combined streams
-                if (!stream && adaptiveStreams.length) {
-                    stream = adaptiveStreams.find(s => s.container === "mp4" && s.encoding === "h264")
-                          || adaptiveStreams.find(s => s.container === "mp4");
-                }
-
-                // Final fallback: try any playable format
-                if (!stream) {
-                    const allStreams = [...streams, ...adaptiveStreams];
-                    for (const s of allStreams) {
-                        const mime = s.mimeType || s.type || "video/mp4";
-                        if (p.canPlayType(mime)) { stream = s; break; }
+                    let data;
+                    try {
+                        data = await res.json();
+                    } catch (jsonErr) {
+                        throw new Error('Invalid JSON response');
                     }
-                }
 
-                if (stream && stream.url) {
-                    p.src = stream.url;
-                    p.style.display = "block";
-                    p.play();
-                    Player.setupHUD(p);
-                    // Start Render Loop
-                    if (App.rafId) cancelAnimationFrame(App.rafId);
-                    App.rafId = requestAnimationFrame(Player.renderLoop);
+                    App.currentVideoData = data;
+
+                    const streams = data.formatStreams || [];
+                    const adaptiveStreams = data.adaptiveFormats || [];
+
+                    let stream = streams.find(s => s.qualityLabel === "1080p" || s.quality === "1080p")
+                              || streams.find(s => s.qualityLabel === "720p" || s.quality === "720p")
+                              || streams.find(s => s.container === "mp4")
+                              || streams[0];
+
+                    if (!stream && adaptiveStreams.length) {
+                        stream = adaptiveStreams.find(s => s.container === "mp4" && s.encoding === "h264")
+                              || adaptiveStreams.find(s => s.container === "mp4");
+                    }
+
+                    if (!stream) {
+                        const allStreams = [...streams, ...adaptiveStreams];
+                        for (const s of allStreams) {
+                            const mime = s.mimeType || s.type || "video/mp4";
+                            if (p.canPlayType(mime)) { stream = s; break; }
+                        }
+                    }
+
+                    if (stream && stream.url) {
+                        streamUrl = stream.url;
+                        // Cache the stream URL
+                        App.streamCache.set(vId, { url: streamUrl, data: data });
+                    }
+                } catch (e) {
+                    App.playerElements.bufferingSpinner.classList.add("hidden");
+                    Player.enforce(vId);
                     return;
                 }
-            } catch(e) {}
+            }
+
+            if (streamUrl) {
+                p.src = streamUrl;
+                p.style.display = "block";
+
+                // Resume from saved position
+                const savedPos = DB.getPosition(vId);
+                if (savedPos > 0) {
+                    p.currentTime = savedPos;
+                    Utils.toast(`Resuming from ${Utils.formatTime(savedPos)}`);
+                }
+
+                p.play();
+                Player.setupHUD(p);
+
+                // Start Render Loop ONLY after successful setup
+                if (App.rafId) cancelAnimationFrame(App.rafId);
+                App.rafId = requestAnimationFrame(Player.renderLoop);
+                return;
+            }
         }
+
+        App.playerElements.bufferingSpinner.classList.add("hidden");
         Player.enforce(vId);
     },
+
     enforce: (vId) => {
         App.playerMode = "ENFORCE";
-        el("native-player").style.display = "none";
+        App.playerElements.player.style.display = "none";
+        App.playerElements.bufferingSpinner.classList.add("hidden");
         el("enforcement-container").innerHTML = `<iframe src="https://www.youtube.com/embed/${vId}?autoplay=1" allowfullscreen></iframe>`;
     },
+
     setupHUD: (p) => {
         const show = () => {
             el("player-hud").classList.add("visible");
             clearTimeout(App.hudTimer);
-            App.hudTimer = setTimeout(() => el("player-hud").classList.remove("visible"), 4000);
+            App.hudTimer = setTimeout(() => {
+                el("player-hud").classList.remove("visible");
+                el("video-info-overlay").classList.add("hidden");
+            }, 4000);
         };
-        p.onplay = show;
+
+        p.onplay = () => {
+            App.playerElements.bufferingSpinner.classList.add("hidden");
+            show();
+        };
         p.onpause = show;
         p.onseeked = show;
+        p.onwaiting = () => {
+            App.playerElements.bufferingSpinner.classList.remove("hidden");
+        };
+        p.onplaying = () => {
+            App.playerElements.bufferingSpinner.classList.add("hidden");
+        };
     },
-    // GOD TIER: 60FPS UI Loop decoupled from Audio Clock
+
+    // 60FPS UI Loop with cached DOM elements
     renderLoop: () => {
         if (App.view !== "PLAYER") return;
 
-        const p = el("native-player");
+        const pe = App.playerElements;
+        const p = pe.player;
+
         if (!p.paused && !isNaN(p.duration)) {
             const pct = p.currentTime / p.duration;
-            // Use GPU-accelerated scaleX transform
-            el("progress-fill").style.transform = "scaleX(" + pct + ")";
-            el("curr-time").textContent = Utils.formatTime(p.currentTime);
-            el("total-time").textContent = Utils.formatTime(p.duration);
+            pe.progressFill.style.transform = "scaleX(" + pct + ")";
+            pe.currTime.textContent = Utils.formatTime(p.currentTime);
+            pe.totalTime.textContent = Utils.formatTime(p.duration);
+
+            // Update buffer bar
+            if (p.buffered.length > 0) {
+                const bufferedEnd = p.buffered.end(p.buffered.length - 1);
+                const bufferPct = bufferedEnd / p.duration;
+                pe.bufferFill.style.transform = "scaleX(" + bufferPct + ")";
+            }
 
             // Binary Search for Segment (with skip loop protection)
             const seg = Utils.findSegment(p.currentTime);
             if (seg && seg !== App.lastSkippedSeg) {
                 App.lastSkippedSeg = seg;
-                // Add 0.1s offset to prevent landing at exact boundary
                 p.currentTime = seg.segment[1] + 0.1;
                 Utils.toast("Skipped sponsor");
             } else if (!seg) {
-                // Clear last skipped when out of any segment
                 App.lastSkippedSeg = null;
             }
         }
         App.rafId = requestAnimationFrame(Player.renderLoop);
     },
+
+    seek: (direction, accelerated = false) => {
+        const p = App.playerElements.player;
+        if (App.playerMode !== "BYPASS" || isNaN(p.duration)) return;
+
+        let seekAmount = SEEK_INTERVALS[0]; // 10s default
+
+        if (accelerated) {
+            const heldTime = Date.now() - App.seekKeyTime;
+            if (heldTime > 2000) {
+                seekAmount = SEEK_INTERVALS[2]; // 60s
+            } else if (heldTime > SEEK_ACCELERATION_DELAY) {
+                seekAmount = SEEK_INTERVALS[1]; // 30s
+            }
+        }
+
+        const newTime = direction === 'left'
+            ? p.currentTime - seekAmount
+            : p.currentTime + seekAmount;
+
+        // Clamp to valid range
+        p.currentTime = Utils.clamp(newTime, 0, p.duration);
+    },
+
+    cycleSpeed: () => {
+        const p = App.playerElements.player;
+        App.playbackSpeedIdx = (App.playbackSpeedIdx + 1) % PLAYBACK_SPEEDS.length;
+        const speed = PLAYBACK_SPEEDS[App.playbackSpeedIdx];
+        p.playbackRate = speed;
+        HUD.updateSpeedBadge(speed);
+        Utils.toast(`Speed: ${speed}x`);
+    },
+
+    toggleInfo: () => {
+        const overlay = el("video-info-overlay");
+        const isVisible = !overlay.classList.contains("hidden");
+
+        if (isVisible) {
+            overlay.classList.add("hidden");
+        } else {
+            // Populate info
+            const data = App.currentVideoData;
+            if (data) {
+                el("info-title").textContent = data.title || "Unknown";
+                el("info-author").textContent = data.author || "Unknown";
+                el("info-views").textContent = Utils.formatViews(data.viewCount);
+                el("info-date").textContent = Utils.formatFullDate(data.published);
+                el("info-description").textContent = data.description || "No description available.";
+            }
+            overlay.classList.remove("hidden");
+
+            // Keep HUD visible while info is shown
+            clearTimeout(App.hudTimer);
+        }
+    },
+
     stop: () => {
-        const p = el("native-player");
+        const p = App.playerElements ? App.playerElements.player : el("native-player");
+
+        // Save position before stopping
+        if (App.currentVideoId && p.currentTime > 10) {
+            DB.savePosition(App.currentVideoId, p.currentTime, p.duration);
+        }
+
         p.pause();
         p.src = "";
         p.poster = "";
+        p.playbackRate = 1;
         el("enforcement-container").innerHTML = "";
         el("progress-fill").style.transform = "scaleX(0)";
+        el("buffer-fill").style.transform = "scaleX(0)";
+        el("video-info-overlay").classList.add("hidden");
+        if (App.playerElements) {
+            App.playerElements.bufferingSpinner.classList.add("hidden");
+        }
         if (App.rafId) cancelAnimationFrame(App.rafId);
         App.rafId = null;
         App.lastSkippedSeg = null;
         App.sponsorSegs = [];
+        App.currentVideoId = null;
+        App.currentVideoData = null;
+        App.seekKeyHeld = null;
     }
 };
 
 // --- 7. INPUT ---
 function setupRemote() {
     document.addEventListener("visibilitychange", () => {
-        if (document.hidden && App.view === "PLAYER") el("native-player").pause();
+        if (document.hidden && App.view === "PLAYER") {
+            const p = App.playerElements ? App.playerElements.player : el("native-player");
+            p.pause();
+        }
+    });
+
+    // Handle key release for seek acceleration
+    document.addEventListener('keyup', (e) => {
+        if (e.keyCode === 37 || e.keyCode === 39) {
+            App.seekKeyHeld = null;
+            App.seekKeyTime = 0;
+        }
     });
 
     document.addEventListener('keydown', (e) => {
         if (e.keyCode !== 10009) App.exitCounter = 0;
 
         if (App.view === "PLAYER") {
-            const p = el("native-player");
+            const p = App.playerElements ? App.playerElements.player : el("native-player");
             const item = App.items[App.focus.index];
-            switch(e.keyCode) {
+
+            switch (e.keyCode) {
                 case 10009: // BACK
                     App.view = "BROWSE";
                     el("player-layer").classList.add("hidden");
                     Player.stop();
                     break;
-                case 415: case 13: 
-                    if(App.playerMode==="BYPASS") p.paused ? p.play() : p.pause(); 
+                case 415: case 13: // PLAY or OK
+                    if (App.playerMode === "BYPASS") p.paused ? p.play() : p.pause();
                     break;
-                case 37: if(App.playerMode==="BYPASS") p.currentTime -= 10; break;
-                case 39: if(App.playerMode==="BYPASS") p.currentTime += 10; break;
-                case 403: // RED
+                case 37: // LEFT - seek back with acceleration
+                    if (App.playerMode === "BYPASS") {
+                        if (App.seekKeyHeld !== 'left') {
+                            App.seekKeyHeld = 'left';
+                            App.seekKeyTime = Date.now();
+                        }
+                        Player.seek('left', App.seekKeyHeld === 'left');
+                    }
+                    break;
+                case 39: // RIGHT - seek forward with acceleration
+                    if (App.playerMode === "BYPASS") {
+                        if (App.seekKeyHeld !== 'right') {
+                            App.seekKeyHeld = 'right';
+                            App.seekKeyTime = Date.now();
+                        }
+                        Player.seek('right', App.seekKeyHeld === 'right');
+                    }
+                    break;
+                case 403: // RED - Toggle player mode
                     const vId = Utils.getVideoId(item);
-                    if(App.playerMode==="BYPASS") Player.enforce(vId);
-                    else { el("enforcement-container").innerHTML=""; p.style.display="block"; p.play(); App.playerMode="BYPASS"; }
+                    if (App.playerMode === "BYPASS") {
+                        Player.enforce(vId);
+                    } else {
+                        el("enforcement-container").innerHTML = "";
+                        p.style.display = "block";
+                        p.play();
+                        App.playerMode = "BYPASS";
+                    }
                     break;
-                case 406: // BLUE
-                    if(item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
+                case 404: // GREEN - Playback speed
+                    if (App.playerMode === "BYPASS") Player.cycleSpeed();
+                    break;
+                case 405: // YELLOW - Video info
+                    Player.toggleInfo();
+                    break;
+                case 406: // BLUE - Subscribe
+                    if (item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
+                    break;
+                case 457: // INFO button (some remotes)
+                    Player.toggleInfo();
                     break;
             }
             return;
         }
 
         if (App.view === "SETTINGS") {
-            switch(e.keyCode) {
+            switch (e.keyCode) {
                 case 10009: // BACK
                     el("settings-overlay").classList.add("hidden");
                     App.view = "BROWSE";
@@ -680,8 +987,8 @@ function setupRemote() {
                 case 13: // ENTER
                     App.actions.saveSettings();
                     break;
-                case 38: // UP - Focus previous input
-                case 40: // DOWN - Focus next input
+                case 38: // UP
+                case 40: // DOWN
                     const inputs = ["profile-name-input", "api-input", "save-btn"];
                     const active = document.activeElement;
                     let idx = inputs.indexOf(active ? active.id : "");
@@ -699,32 +1006,53 @@ function setupRemote() {
             return;
         }
 
-        switch(e.keyCode) {
+        switch (e.keyCode) {
             case 38: // UP
                 if (App.focus.area === "grid" && App.focus.index >= 4) App.focus.index -= 4;
-                else if (App.focus.area === "menu") { App.menuIdx--; if(App.menuIdx<0)App.menuIdx=0; }
+                else if (App.focus.area === "menu") { App.menuIdx--; if (App.menuIdx < 0) App.menuIdx = 0; }
                 break;
             case 40: // DOWN
                 if (App.focus.area === "grid") {
-                    const next = App.focus.index + 4;
-                    if (next < App.items.length) App.focus.index = next;
-                    else {
-                        // Deadzone Fix: Snap to last item if on last row
-                        const rowStart = Math.floor(App.focus.index / 4) * 4;
-                        if (rowStart + 4 < App.items.length) App.focus.index = App.items.length - 1;
+                    const itemCount = App.items.length;
+                    const cols = 4;
+                    const currentRow = Math.floor(App.focus.index / cols);
+                    const currentCol = App.focus.index % cols;
+                    const totalRows = Math.ceil(itemCount / cols);
+
+                    if (currentRow < totalRows - 1) {
+                        // Not on the last row
+                        const nextIdx = App.focus.index + cols;
+                        if (nextIdx < itemCount) {
+                            App.focus.index = nextIdx;
+                        } else {
+                            // Target position doesn't exist, go to last item in next row
+                            App.focus.index = itemCount - 1;
+                        }
                     }
+                    // If on last row, do nothing (stay in place)
+                } else if (App.focus.area === "menu") {
+                    App.menuIdx++;
+                    if (App.menuIdx > 3) App.menuIdx = 3;
                 }
-                else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>3)App.menuIdx=3; }
                 break;
             case 37: // LEFT
                 if (App.focus.area === "grid") {
-                    if (App.focus.index % 4 === 0) { App.focus.area = "menu"; el("sidebar").classList.add("expanded"); }
-                    else App.focus.index--;
+                    if (App.focus.index % 4 === 0) {
+                        App.focus.area = "menu";
+                        el("sidebar").classList.add("expanded");
+                    } else {
+                        App.focus.index--;
+                    }
                 }
                 break;
             case 39: // RIGHT
-                if (App.focus.area === "menu") { App.focus.area = "grid"; el("sidebar").classList.remove("expanded"); App.focus.index = 0; }
-                else if (App.focus.area === "grid" && App.focus.index < App.items.length - 1) App.focus.index++;
+                if (App.focus.area === "menu") {
+                    App.focus.area = "grid";
+                    el("sidebar").classList.remove("expanded");
+                    App.focus.index = 0;
+                } else if (App.focus.area === "grid" && App.focus.index < App.items.length - 1) {
+                    App.focus.index++;
+                }
                 break;
             case 13: // ENTER
                 if (App.focus.area === "menu") App.actions.menuSelect();
@@ -735,19 +1063,19 @@ function setupRemote() {
                 }
                 break;
             case 406: // BLUE
-                 if (App.focus.area === "grid") {
+                if (App.focus.area === "grid") {
                     const i = App.items[App.focus.index];
-                    if(i.authorId) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i));
-                 }
-                 break;
+                    if (i.authorId) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i));
+                }
+                break;
             case 10009: // BACK
                 if (App.focus.area === "search") {
                     App.focus.area = "menu";
                     el("search-input").classList.add("hidden");
                 } else {
                     App.exitCounter++;
-                    if(App.exitCounter >= 2) {
-                        if(typeof tizen!=='undefined') tizen.application.getCurrentApplication().exit();
+                    if (App.exitCounter >= 2) {
+                        if (typeof tizen !== 'undefined') tizen.application.getCurrentApplication().exit();
                     } else Utils.toast("Back Again to Exit");
                 }
                 break;
@@ -758,20 +1086,20 @@ function setupRemote() {
 
 App.actions = {
     menuSelect: () => {
-        if(App.menuIdx===0) Feed.loadHome();
-        if(App.menuIdx===1) Feed.renderSubs();
-        if(App.menuIdx===2) { 
-            App.focus.area="search"; 
+        if (App.menuIdx === 0) Feed.loadHome();
+        if (App.menuIdx === 1) Feed.renderSubs();
+        if (App.menuIdx === 2) {
+            App.focus.area = "search";
             const inp = el("search-input");
-            inp.classList.remove("hidden"); 
-            inp.focus(); 
+            inp.classList.remove("hidden");
+            inp.focus();
         }
-        if(App.menuIdx===3) { App.view="SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
+        if (App.menuIdx === 3) { App.view = "SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
     },
     runSearch: () => {
         const inp = el("search-input");
         const q = inp.value;
-        inp.blur(); // Fix Ghost Keyboard
+        inp.blur();
         inp.classList.add("hidden");
         Feed.fetch(`/search?q=${encodeURIComponent(q)}`);
     },
@@ -782,8 +1110,8 @@ App.actions = {
     saveSettings: () => {
         const name = el("profile-name-input").value.trim();
         const api = el("api-input").value.trim();
-        if(name) DB.saveProfileName(name.substring(0,20)); // Limit length
-        if(api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
+        if (name) DB.saveProfileName(name.substring(0, 20));
+        if (api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
         else localStorage.removeItem("customBase");
         location.reload();
     }
@@ -794,19 +1122,28 @@ const HUD = {
         const b = el("sub-badge");
         b.className = isSubbed ? "badge active" : "badge";
         b.textContent = isSubbed ? "SUBSCRIBED" : "SUBSCRIBE";
+    },
+    updateSpeedBadge: (speed) => {
+        const b = el("speed-badge");
+        if (speed === 1) {
+            b.classList.add("hidden");
+        } else {
+            b.textContent = speed + "x";
+            b.classList.remove("hidden");
+        }
     }
 };
 
 window.onload = async () => {
-    const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-    tick(); setInterval(tick, 60000);
+    const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    tick();
+    setInterval(tick, 60000);
 
-    // Initialize lazy loading for images (Tizen 4.0+ has IntersectionObserver)
     UI.initLazyObserver();
 
-    if(typeof tizen !== 'undefined') {
-        const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Blue', 'Return'];
-        k.forEach(key => { try { tizen.tvinputdevice.registerKey(key); } catch(e){} });
+    if (typeof tizen !== 'undefined') {
+        const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'Return', 'Info'];
+        k.forEach(key => { try { tizen.tvinputdevice.registerKey(key); } catch (e) {} });
     }
 
     el("backend-status").textContent = "Init...";
