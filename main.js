@@ -1,9 +1,9 @@
 /**
- * TinyTube Pro v4.0 (Final Release)
- * - Tizen 4.0 / Chrome 56 Compatibility
- * - No AbortController
- * - Error UI Handling
- * - Safe Exit Logic
+ * TinyTube Pro v4.0 (Tizen 4.0 Legacy Edition)
+ * - Removed Optional Chaining (?.) for Chrome 56
+ * - Removed Array.flat() for Chrome 56
+ * - Removed AbortController
+ * - Fixed DeArrow Spam & Race Conditions
  */
 
 const FALLBACK_INSTANCES = [
@@ -45,7 +45,7 @@ const Utils = {
         try { return JSON.parse(str) || def; } 
         catch { return def; }
     },
-    // FIX: Tizen 4.0 Polyfill for Promise.any
+    // Polyfill for Promise.any
     any: (promises) => {
         return new Promise((resolve, reject) => {
             let errors = [];
@@ -121,7 +121,7 @@ const DB = {
     isSubbed: (id) => !!DB.getSubs().find(s => s.id === id)
 };
 
-// --- 3. NETWORK ENGINE (Tizen 4.0 Safe) ---
+// --- 3. NETWORK ENGINE ---
 const Network = {
     connect: async () => {
         const custom = localStorage.getItem("customBase");
@@ -133,21 +133,20 @@ const Network = {
 
         const cached = localStorage.getItem("lastWorkingApi");
         if(cached) {
-            try {
-                if(await Network.ping(cached)) {
-                    App.api = cached;
-                    log(`Restored: ${cached.split('/')[2]}`);
-                    Feed.loadHome();
-                    Network.updateInstanceList();
-                    return;
-                }
-            } catch(e) {}
+            // Validate cache
+            if(await Network.ping(cached)) {
+                App.api = cached;
+                log(`Restored: ${cached.split('/')[2]}`);
+                Feed.loadHome();
+                Network.updateInstanceList();
+                return;
+            }
         }
 
-        log("Scanning Network Mesh...");
+        log("Scanning Network...");
         const instances = Utils.safeParse(localStorage.getItem("cached_instances"), FALLBACK_INSTANCES);
         
-        // Use custom ping safe for Tizen 4.0
+        // Tizen 4.0 Polyfill Race
         const pings = instances.map(url => 
             Network.ping(url).then(ok => ok ? url : Promise.reject())
         );
@@ -160,16 +159,13 @@ const Network = {
             Feed.loadHome();
             Network.updateInstanceList();
         } catch (e) {
-            el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable. Check Connection.</p>";
+            el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable.</p>";
         }
     },
-    // FIX: Tizen 4.0 (No AbortController)
     ping: async (url) => {
         try {
-            const timeout = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Timeout")), 2500)
-            );
-            // Use race to handle timeout compatibility
+            // Tizen 4.0 Compatibility: No AbortController
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2500));
             const fetcher = fetch(`${url}/trending`);
             const res = await Promise.race([fetcher, timeout]);
             return res.ok;
@@ -207,7 +203,9 @@ const Feed = {
                 } catch { return []; }
             });
 
-            const feed = results.flat().sort((a,b) => b.published - a.published);
+            // Chrome 56 Compatibility: [].concat(...arr) instead of flat()
+            const feed = [].concat(...results).sort((a,b) => b.published - a.published);
+            
             if (feed.length < 10) {
                 const trend = await (await fetch(`${App.api}/trending`)).json();
                 feed.push(...trend.slice(0, 10));
@@ -225,7 +223,6 @@ const Feed = {
             const data = await res.json();
             UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
         } catch(e) { 
-            // FIX: Error UI
             log("Feed Error");
             el("grid-container").innerHTML = "<p>Connection Failed. Try Reloading.</p>"; 
         }
@@ -257,15 +254,26 @@ const UI = {
             const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
             div.id = `card-${idx}`;
 
-            const img = Utils.create("img", item.type === "channel" ? "c-avatar" : "thumb");
-            img.src = (item.videoThumbnails?.[0]?.url || item.authorThumbnails?.[0]?.url || "icon.png");
-            img.onerror = function() { this.src = "icon.png"; };
-            div.appendChild(img);
+            // Tizen 4.0 Compatibility: Manual Optional Chaining
+            let thumbUrl = "icon.png";
+            if (item.videoThumbnails && item.videoThumbnails.length > 0) thumbUrl = item.videoThumbnails[0].url;
+            else if (item.authorThumbnails && item.authorThumbnails.length > 0) thumbUrl = item.authorThumbnails[0].url;
+            else if (item.thumbnail) thumbUrl = item.thumbnail;
 
+            // Image Construction with Aspect Ratio Container
             if (item.type === "channel") {
+                const img = Utils.create("img", "c-avatar");
+                img.src = thumbUrl;
+                div.appendChild(img);
                 div.appendChild(Utils.create("h3", null, item.author));
                 if(DB.isSubbed(item.authorId)) div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
             } else {
+                const thumbCont = Utils.create("div", "thumb-container");
+                const img = Utils.create("img", "thumb");
+                img.src = thumbUrl;
+                thumbCont.appendChild(img);
+                div.appendChild(thumbCont);
+
                 const meta = Utils.create("div", "meta");
                 const h3 = Utils.create("h3", null, item.title);
                 h3.id = `title-${idx}`;
@@ -303,7 +311,9 @@ const UI = {
     },
     fetchDeArrow: (item, idx) => {
         item.deArrowChecked = true;
-        const vId = item.videoId || item.url?.split("v=")[1];
+        // Tizen 4.0 safe check
+        let vId = item.videoId;
+        if (!vId && item.url) vId = item.url.split("v=")[1];
         if(!vId) return;
 
         if(App.deArrowCache.has(vId)) {
@@ -322,12 +332,15 @@ const UI = {
     },
     applyDeArrow: (d, idx, originalId) => {
         if (!App.items[idx]) return;
-        const currentId = App.items[idx].videoId || App.items[idx].url?.split("v=")[1];
         
-        // FIX: Race Condition Check
+        // Race Condition Check
+        let currentId = App.items[idx].videoId;
+        if (!currentId && App.items[idx].url) currentId = App.items[idx].url.split("v=")[1];
+        
         if (currentId !== originalId) return;
 
-        if(d.titles?.[0]) {
+        // Manual check instead of ?.
+        if(d.titles && d.titles.length > 0) {
             const elTitle = el(`title-${idx}`);
             if(elTitle) elTitle.textContent = d.titles[0].title;
             App.items[idx].title = d.titles[0].title;
@@ -341,10 +354,11 @@ const Player = {
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
         el("player-layer").classList.remove("hidden");
-        // FIX: Visible HUD
         el("player-hud").classList.add("visible");
         
-        const vId = item.videoId || item.url.split("v=")[1];
+        let vId = item.videoId;
+        if (!vId && item.url) vId = item.url.split("v=")[1];
+
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
 
@@ -357,11 +371,17 @@ const Player = {
                 const data = await res.json();
                 
                 const p = el("native-player");
-                let validStream = data.videoStreams.find(s => s.quality === "1080p" && s.format === "MPEG-4") 
-                               || data.videoStreams.find(s => s.format === "MPEG-4");
+                let validStream = null;
+                
+                // Chrome 56 Compatibility: Safe checks
+                if (data.videoStreams) {
+                    validStream = data.videoStreams.find(s => s.quality === "1080p" && s.format === "MPEG-4");
+                    if (!validStream) validStream = data.videoStreams.find(s => s.format === "MPEG-4");
+                }
 
-                if(!validStream && data.videoStreams.length > 0) {
-                    for(let s of data.videoStreams) {
+                if(!validStream && data.videoStreams && data.videoStreams.length > 0) {
+                    for(let i=0; i<data.videoStreams.length; i++) {
+                         let s = data.videoStreams[i];
                          if(p.canPlayType(s.mimeType) !== "") { validStream = s; break; }
                     }
                 }
@@ -410,7 +430,6 @@ const Player = {
 // --- 7. INPUT HANDLER ---
 function setupRemote() {
     document.addEventListener('keydown', (e) => {
-        // FIX: Hotel California Safe Exit
         if (e.keyCode !== 10009) App.exitCounter = 0;
 
         if (App.view === "PLAYER") {
@@ -426,7 +445,8 @@ function setupRemote() {
                 case 37: if(App.playerMode==="BYPASS") p.currentTime -= 10; break;
                 case 39: if(App.playerMode==="BYPASS") p.currentTime += 10; break;
                 case 403: // RED
-                    const vId = item.videoId || item.url.split("v=")[1];
+                    let vId = item.videoId;
+                    if (!vId && item.url) vId = item.url.split("v=")[1];
                     if(App.playerMode==="BYPASS") Player.enforce(vId);
                     else { el("enforcement-container").innerHTML=""; p.style.display="block"; p.play(); App.playerMode="BYPASS"; }
                     break;
