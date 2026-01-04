@@ -1,9 +1,24 @@
 /**
- * TinyTube Pro v5.0 (God-Tier Final)
- * - Fixed: AbortController Crash on Tizen 4.0 (replaced with Token pattern)
- * - Optimized: 60 FPS Smooth UI via requestAnimationFrame
- * - Optimized: O(1) LRU Cache
- * - Optimized: Binary Search for SponsorBlock
+ * TinyTube Pro v5.1.0 (Tizen 4.0+ Optimized)
+ *
+ * Bug Fixes:
+ * - Fixed: Missing getAuthorThumb function (runtime crash)
+ * - Fixed: Incorrect Invidious API endpoint (/streams -> /videos)
+ * - Fixed: SponsorBlock skip loop (repeated skipping at segment boundaries)
+ * - Fixed: AbortController crash on Tizen 4.0 (uses token pattern)
+ * - Fixed: DeArrow pending tokens now cleaned on view change
+ *
+ * Optimizations:
+ * - GPU-accelerated progress bar (CSS transform instead of width)
+ * - Lazy image loading with IntersectionObserver (200px preload margin)
+ * - O(1) subscription cache (invalidated on change)
+ * - O(1) LRU Cache for DeArrow data (200 item limit)
+ * - O(log n) Binary Search for SponsorBlock segments
+ * - Parallel fetch for SponsorBlock + video streams
+ * - 60 FPS UI loop via requestAnimationFrame
+ * - Broken thumbnail fallback to icon.png
+ * - Video poster image for better loading UX
+ * - Settings modal keyboard navigation (Up/Down arrows)
  */
 
 const FALLBACK_INSTANCES = [
@@ -47,11 +62,17 @@ const App = {
     profileId: 0,
     playerMode: "BYPASS",
     sponsorSegs: [],
+    lastSkippedSeg: null, // Prevent skip loops
     exitCounter: 0,
     deArrowCache: new LRUCache(200),
     // Cancellation Tokens for Tizen 4.0 (No AbortController)
-    pendingDeArrow: {}, 
-    rafId: null // Animation Frame ID
+    pendingDeArrow: {},
+    rafId: null, // Animation Frame ID
+    // Subscription cache (invalidated on change)
+    subsCache: null,
+    subsCacheId: null,
+    // Lazy load observer (Tizen 4.0+ has IntersectionObserver)
+    lazyObserver: null
 };
 
 const el = (id) => document.getElementById(id);
@@ -149,6 +170,15 @@ const Utils = {
             else l = m + 1;
         }
         return null;
+    },
+    // Extract author thumbnail from item
+    getAuthorThumb: (item) => {
+        if (!item) return "icon.png";
+        if (item.authorThumbnails && item.authorThumbnails[0]) {
+            return item.authorThumbnails[0].url;
+        }
+        if (item.thumb) return item.thumb;
+        return "icon.png";
     }
 };
 
@@ -160,6 +190,9 @@ const DB = {
         el("p-name").textContent = names[App.profileId];
         el("modal-profile-id").textContent = `#${App.profileId + 1}`;
         el("profile-name-input").value = names[App.profileId];
+        // Invalidate subs cache on profile load
+        App.subsCache = null;
+        App.subsCacheId = null;
     },
     saveProfileName: (name) => {
         const names = Utils.safeParse(localStorage.getItem("tt_pnames"), ["User 1", "User 2", "User 3"]);
@@ -167,10 +200,18 @@ const DB = {
         localStorage.setItem("tt_pnames", JSON.stringify(names));
         DB.loadProfile();
     },
-    getSubs: () => Utils.safeParse(localStorage.getItem(`tt_subs_${App.profileId}`), []),
+    // Cached subscription getter (O(1) after first call)
+    getSubs: () => {
+        if (App.subsCache && App.subsCacheId === App.profileId) {
+            return App.subsCache;
+        }
+        App.subsCache = Utils.safeParse(localStorage.getItem(`tt_subs_${App.profileId}`), []);
+        App.subsCacheId = App.profileId;
+        return App.subsCache;
+    },
     toggleSub: (id, name, thumb) => {
         if (!id) return;
-        let subs = DB.getSubs();
+        let subs = DB.getSubs().slice(); // Clone to avoid mutation
         const exists = subs.find(s => s.id === id);
         if (exists) {
             subs = subs.filter(s => s.id !== id);
@@ -180,8 +221,10 @@ const DB = {
             Utils.toast(`Subscribed: ${name}`);
         }
         localStorage.setItem(`tt_subs_${App.profileId}`, JSON.stringify(subs));
+        // Update cache
+        App.subsCache = subs;
         if(App.view === "PLAYER") HUD.updateSubBadge(!exists);
-        if(App.menuIdx === 1) Feed.renderSubs(); 
+        if(App.menuIdx === 1) Feed.renderSubs();
     },
     isSubbed: (id) => !!DB.getSubs().find(s => s.id === id)
 };
@@ -302,10 +345,37 @@ const Feed = {
 
 // --- 5. UI ---
 const UI = {
+    // Initialize lazy loading observer (call once on app start)
+    initLazyObserver: () => {
+        if (!("IntersectionObserver" in window)) return; // Fallback for very old Tizen
+        App.lazyObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    if (img.dataset.src) {
+                        img.src = img.dataset.src;
+                        img.removeAttribute("data-src");
+                        App.lazyObserver.unobserve(img);
+                    }
+                }
+            });
+        }, { rootMargin: "200px" }); // Preload 200px before visible
+    },
+    // Handle broken image fallback
+    handleImgError: (img) => {
+        img.onerror = null; // Prevent infinite loop
+        img.src = "icon.png";
+    },
     renderGrid: (data) => {
         App.items = data || [];
         const grid = el("grid-container");
         grid.textContent = "";
+
+        // Clear pending DeArrow tokens
+        for (const key in App.pendingDeArrow) {
+            clearTimeout(App.pendingDeArrow[key]);
+            delete App.pendingDeArrow[key];
+        }
 
         if (App.items.length === 0) {
             grid.innerHTML = '<div class="empty-state"><h3>No Results</h3></div>';
@@ -313,6 +383,7 @@ const UI = {
         }
 
         const frag = document.createDocumentFragment();
+        const useLazy = App.lazyObserver !== null;
         let idx = 0;
 
         for (const item of App.items) {
@@ -320,7 +391,7 @@ const UI = {
 
             const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
             div.id = `card-${idx}`;
-            
+
             // Thumb
             let thumbUrl = "icon.png";
             if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
@@ -329,30 +400,44 @@ const UI = {
 
             if (item.type === "channel") {
                 const img = Utils.create("img", "c-avatar");
-                img.src = thumbUrl;
+                img.onerror = function() { UI.handleImgError(this); };
+                if (useLazy && idx > 7) { // Lazy load after first 8 items
+                    img.dataset.src = thumbUrl;
+                    img.src = "icon.png";
+                    App.lazyObserver.observe(img);
+                } else {
+                    img.src = thumbUrl;
+                }
                 div.appendChild(img);
                 div.appendChild(Utils.create("h3", null, item.author));
                 if(DB.isSubbed(item.authorId)) div.appendChild(Utils.create("div", "sub-tag", "SUBSCRIBED"));
             } else {
                 const tc = Utils.create("div", "thumb-container");
                 const img = Utils.create("img", "thumb");
-                img.src = thumbUrl;
+                img.onerror = function() { UI.handleImgError(this); };
+                if (useLazy && idx > 7) { // Lazy load after first 8 items
+                    img.dataset.src = thumbUrl;
+                    img.src = "icon.png";
+                    App.lazyObserver.observe(img);
+                } else {
+                    img.src = thumbUrl;
+                }
                 tc.appendChild(img);
-                
+
                 if (item.lengthSeconds) tc.appendChild(Utils.create("span", "duration-badge", Utils.formatTime(item.lengthSeconds)));
                 if (item.liveNow) tc.appendChild(Utils.create("span", "live-badge", "LIVE"));
-                
+
                 div.appendChild(tc);
 
                 const meta = Utils.create("div", "meta");
                 const h3 = Utils.create("h3", null, item.title);
                 h3.id = `title-${idx}`;
                 meta.appendChild(h3);
-                
-                let info = item.author;
-                if(item.viewCount) info += " • " + Utils.formatViews(item.viewCount);
-                if(item.published) info += " • " + Utils.formatDate(item.published);
-                
+
+                let info = item.author || "";
+                if(item.viewCount) info += (info ? " • " : "") + Utils.formatViews(item.viewCount);
+                if(item.published) info += (info ? " • " : "") + Utils.formatDate(item.published);
+
                 meta.appendChild(Utils.create("p", null, info));
                 div.appendChild(meta);
             }
@@ -360,7 +445,7 @@ const UI = {
             idx++;
         }
         grid.appendChild(frag);
-        
+
         App.focus = { area: "grid", index: 0 };
         UI.updateFocus();
     },
@@ -424,35 +509,65 @@ const Player = {
     start: async (item) => {
         if(!item) return;
         App.view = "PLAYER";
+        App.playerMode = "BYPASS";
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
-        
+
         const vId = Utils.getVideoId(item);
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
 
-        // Sort segments for O(log n) lookup
-        fetch(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`)
-            .then(r=>r.ok?r.json():[])
-            .then(s => App.sponsorSegs = s.sort((a,b) => a.segment[0] - b.segment[0]))
-            .catch(() => App.sponsorSegs = []);
+        // Get thumbnail for poster
+        let posterUrl = "";
+        if (item.videoThumbnails && item.videoThumbnails[0]) {
+            posterUrl = item.videoThumbnails[0].url;
+        } else if (item.thumbnail) {
+            posterUrl = item.thumbnail;
+        }
+
+        const p = el("native-player");
+        if (posterUrl) p.poster = posterUrl;
+
+        // Parallel fetch: SponsorBlock + Video streams
+        const sponsorPromise = fetch(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`)
+            .then(r => r.ok ? r.json() : [])
+            .then(s => { App.sponsorSegs = s.sort((a, b) => a.segment[0] - b.segment[0]); })
+            .catch(() => { App.sponsorSegs = []; });
 
         if (App.api) {
             try {
-                const res = await fetch(`${App.api}/streams/${vId}`);
+                const [res] = await Promise.all([
+                    fetch(`${App.api}/videos/${vId}`),
+                    sponsorPromise // Run in parallel
+                ]);
                 const data = await res.json();
-                
-                const p = el("native-player");
-                let stream = data.videoStreams.find(s => s.quality === "1080p" && s.format === "MPEG-4") 
-                          || data.videoStreams.find(s => s.format === "MPEG-4");
 
-                if(!stream && data.videoStreams.length) {
-                    for(const s of data.videoStreams) {
-                        if(p.canPlayType(s.mimeType)) { stream = s; break; }
+                // Use formatStreams (combined audio+video) - best for Tizen 4.0
+                const streams = data.formatStreams || [];
+                const adaptiveStreams = data.adaptiveFormats || [];
+
+                // Prefer 720p/1080p combined streams for compatibility
+                let stream = streams.find(s => s.qualityLabel === "1080p" || s.quality === "1080p")
+                          || streams.find(s => s.qualityLabel === "720p" || s.quality === "720p")
+                          || streams.find(s => s.container === "mp4")
+                          || streams[0];
+
+                // Fallback to adaptive formats if no combined streams
+                if (!stream && adaptiveStreams.length) {
+                    stream = adaptiveStreams.find(s => s.container === "mp4" && s.encoding === "h264")
+                          || adaptiveStreams.find(s => s.container === "mp4");
+                }
+
+                // Final fallback: try any playable format
+                if (!stream) {
+                    const allStreams = [...streams, ...adaptiveStreams];
+                    for (const s of allStreams) {
+                        const mime = s.mimeType || s.type || "video/mp4";
+                        if (p.canPlayType(mime)) { stream = s; break; }
                     }
                 }
 
-                if(stream) {
+                if (stream && stream.url) {
                     p.src = stream.url;
                     p.style.display = "block";
                     p.play();
@@ -484,19 +599,25 @@ const Player = {
     // GOD TIER: 60FPS UI Loop decoupled from Audio Clock
     renderLoop: () => {
         if (App.view !== "PLAYER") return;
-        
+
         const p = el("native-player");
-        if (!p.paused) {
-            const pct = (p.currentTime / p.duration) * 100;
-            el("progress-fill").style.width = pct + "%";
+        if (!p.paused && !isNaN(p.duration)) {
+            const pct = p.currentTime / p.duration;
+            // Use GPU-accelerated scaleX transform
+            el("progress-fill").style.transform = "scaleX(" + pct + ")";
             el("curr-time").textContent = Utils.formatTime(p.currentTime);
             el("total-time").textContent = Utils.formatTime(p.duration);
 
-            // Binary Search for Segment
+            // Binary Search for Segment (with skip loop protection)
             const seg = Utils.findSegment(p.currentTime);
-            if (seg) {
-                p.currentTime = seg.segment[1];
-                Utils.toast("Skipped");
+            if (seg && seg !== App.lastSkippedSeg) {
+                App.lastSkippedSeg = seg;
+                // Add 0.1s offset to prevent landing at exact boundary
+                p.currentTime = seg.segment[1] + 0.1;
+                Utils.toast("Skipped sponsor");
+            } else if (!seg) {
+                // Clear last skipped when out of any segment
+                App.lastSkippedSeg = null;
             }
         }
         App.rafId = requestAnimationFrame(Player.renderLoop);
@@ -505,8 +626,13 @@ const Player = {
         const p = el("native-player");
         p.pause();
         p.src = "";
+        p.poster = "";
         el("enforcement-container").innerHTML = "";
+        el("progress-fill").style.transform = "scaleX(0)";
         if (App.rafId) cancelAnimationFrame(App.rafId);
+        App.rafId = null;
+        App.lastSkippedSeg = null;
+        App.sponsorSegs = [];
     }
 };
 
@@ -546,8 +672,24 @@ function setupRemote() {
         }
 
         if (App.view === "SETTINGS") {
-            if(e.keyCode === 10009) { el("settings-overlay").classList.add("hidden"); App.view = "BROWSE"; }
-            if(e.keyCode === 13) App.actions.saveSettings();
+            switch(e.keyCode) {
+                case 10009: // BACK
+                    el("settings-overlay").classList.add("hidden");
+                    App.view = "BROWSE";
+                    break;
+                case 13: // ENTER
+                    App.actions.saveSettings();
+                    break;
+                case 38: // UP - Focus previous input
+                case 40: // DOWN - Focus next input
+                    const inputs = ["profile-name-input", "api-input", "save-btn"];
+                    const active = document.activeElement;
+                    let idx = inputs.indexOf(active ? active.id : "");
+                    if (idx === -1) idx = 0;
+                    else idx = e.keyCode === 40 ? Math.min(idx + 1, inputs.length - 1) : Math.max(idx - 1, 0);
+                    el(inputs[idx]).focus();
+                    break;
+            }
             return;
         }
 
@@ -658,7 +800,10 @@ const HUD = {
 window.onload = async () => {
     const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     tick(); setInterval(tick, 60000);
-    
+
+    // Initialize lazy loading for images (Tizen 4.0+ has IntersectionObserver)
+    UI.initLazyObserver();
+
     if(typeof tizen !== 'undefined') {
         const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Blue', 'Return'];
         k.forEach(key => { try { tizen.tvinputdevice.registerKey(key); } catch(e){} });
