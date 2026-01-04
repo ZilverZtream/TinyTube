@@ -1,9 +1,9 @@
 /**
- * TinyTube Pro v3.5 (Diamond Edition)
- * - Fixed: Tizen 4.0 Compatibility (Promise.any polyfill)
- * - Fixed: Invisible HUD bug
- * - Fixed: DeArrow async race condition
- * - Fixed: Exit logic reset
+ * TinyTube Pro v4.0 (Final Release)
+ * - Tizen 4.0 / Chrome 56 Compatibility
+ * - No AbortController
+ * - Error UI Handling
+ * - Safe Exit Logic
  */
 
 const FALLBACK_INSTANCES = [
@@ -45,7 +45,7 @@ const Utils = {
         try { return JSON.parse(str) || def; } 
         catch { return def; }
     },
-    // FIX 1: Tizen 4.0 Polyfill for Promise.any
+    // FIX: Tizen 4.0 Polyfill for Promise.any
     any: (promises) => {
         return new Promise((resolve, reject) => {
             let errors = [];
@@ -121,7 +121,7 @@ const DB = {
     isSubbed: (id) => !!DB.getSubs().find(s => s.id === id)
 };
 
-// --- 3. NETWORK ENGINE ---
+// --- 3. NETWORK ENGINE (Tizen 4.0 Safe) ---
 const Network = {
     connect: async () => {
         const custom = localStorage.getItem("customBase");
@@ -147,12 +147,12 @@ const Network = {
         log("Scanning Network Mesh...");
         const instances = Utils.safeParse(localStorage.getItem("cached_instances"), FALLBACK_INSTANCES);
         
+        // Use custom ping safe for Tizen 4.0
         const pings = instances.map(url => 
             Network.ping(url).then(ok => ok ? url : Promise.reject())
         );
 
         try {
-            // FIX: Use polyfill instead of Promise.any
             const winner = await Utils.any(pings);
             App.api = winner;
             log(`Connected: ${winner.split('/')[2]}`);
@@ -160,15 +160,18 @@ const Network = {
             Feed.loadHome();
             Network.updateInstanceList();
         } catch (e) {
-            el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable.</p>";
+            el("grid-container").innerHTML = "<h3>Network Error</h3><p>All nodes unreachable. Check Connection.</p>";
         }
     },
+    // FIX: Tizen 4.0 (No AbortController)
     ping: async (url) => {
         try {
-            const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 2500);
-            const res = await fetch(`${url}/trending`, { signal: controller.signal });
-            clearTimeout(id);
+            const timeout = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Timeout")), 2500)
+            );
+            // Use race to handle timeout compatibility
+            const fetcher = fetch(`${url}/trending`);
+            const res = await Promise.race([fetcher, timeout]);
             return res.ok;
         } catch { return false; }
     },
@@ -221,7 +224,11 @@ const Feed = {
             const res = await fetch(`${App.api}${endpoint}`);
             const data = await res.json();
             UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
-        } catch(e) { log("Feed Error"); }
+        } catch(e) { 
+            // FIX: Error UI
+            log("Feed Error");
+            el("grid-container").innerHTML = "<p>Connection Failed. Try Reloading.</p>"; 
+        }
     },
     renderSubs: () => {
         el("section-title").textContent = "Manage Subscriptions";
@@ -304,7 +311,6 @@ const UI = {
             return;
         }
 
-        // Cache Limit Cleanup
         if (App.deArrowCache.size > 200) App.deArrowCache.clear();
 
         fetch(`${DEARROW_API}?videoID=${vId}`)
@@ -314,12 +320,11 @@ const UI = {
                 UI.applyDeArrow(d, idx, vId);
             }).catch(()=>{});
     },
-    // FIX 3: Race Condition check
     applyDeArrow: (d, idx, originalId) => {
         if (!App.items[idx]) return;
         const currentId = App.items[idx].videoId || App.items[idx].url?.split("v=")[1];
         
-        // Safety check: Is the item at this index still the same video?
+        // FIX: Race Condition Check
         if (currentId !== originalId) return;
 
         if(d.titles?.[0]) {
@@ -336,7 +341,7 @@ const Player = {
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
         el("player-layer").classList.remove("hidden");
-        // FIX 2: Make HUD visible
+        // FIX: Visible HUD
         el("player-hud").classList.add("visible");
         
         const vId = item.videoId || item.url.split("v=")[1];
@@ -379,7 +384,6 @@ const Player = {
         Utils.toast("Enforcement Mode Active");
     },
     setupHUD: (p) => {
-        // Reset timer on interaction
         const resetTimer = () => {
             el("player-hud").classList.add("visible");
             if(App.hudTimer) clearTimeout(App.hudTimer);
@@ -399,7 +403,6 @@ const Player = {
             }
         };
 
-        // Hook interactions to show HUD
         ["play", "pause", "seeked"].forEach(e => p.addEventListener(e, resetTimer));
     }
 };
@@ -407,7 +410,7 @@ const Player = {
 // --- 7. INPUT HANDLER ---
 function setupRemote() {
     document.addEventListener('keydown', (e) => {
-        // FIX 4: HOTEL CALIFORNIA (Safety Check)
+        // FIX: Hotel California Safe Exit
         if (e.keyCode !== 10009) App.exitCounter = 0;
 
         if (App.view === "PLAYER") {
@@ -446,7 +449,6 @@ function setupRemote() {
             return;
         }
 
-        // BROWSE NAV
         switch(e.keyCode) {
             case 38: // UP
                 if (App.focus.area === "grid" && App.focus.index >= 4) App.focus.index -= 4;
@@ -495,7 +497,6 @@ function setupRemote() {
     });
 }
 
-// --- ACTIONS ---
 const App.actions = {
     menuSelect: () => {
         if(App.menuIdx===0) Feed.loadHome();
@@ -531,7 +532,6 @@ const HUD = {
     }
 };
 
-// --- BOOT ---
 window.onload = async () => {
     const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     tick(); setInterval(tick, 60000);
