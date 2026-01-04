@@ -1,4 +1,4 @@
-/* TinyTube Pro - Enhanced UI for Tizen 4.0 */
+/* TinyTube Pro v6.0.0 - Enhanced UI for Tizen 4.0 */
 body {
     margin: 0;
     background: #0a0a0a;
@@ -247,6 +247,25 @@ body {
     50% { opacity: 0.7; }
 }
 
+/* RESUME BADGE - Continue Watching indicator */
+.resume-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: linear-gradient(135deg, #ff3333 0%, #cc2929 100%);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-family: monospace;
+    box-shadow: 0 2px 8px rgba(255,51,51,0.4);
+}
+.resume-badge::before {
+    content: "▶ ";
+    font-size: 9px;
+}
+
 .meta {
     padding: 14px 16px;
 }
@@ -355,6 +374,27 @@ iframe {
     width: 100%;
     height: 100%;
 }
+
+/* BUFFERING SPINNER */
+#buffering-spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 110;
+}
+.buffering-icon {
+    width: 80px;
+    height: 80px;
+    border: 5px solid rgba(255,255,255,0.2);
+    border-top-color: #ff3333;
+    border-radius: 50%;
+    animation: spin 1s infinite linear;
+}
+@keyframes spin {
+    100% { transform: rotate(360deg); }
+}
+
 #player-hud {
     position: absolute;
     bottom: 0;
@@ -403,22 +443,40 @@ iframe {
     bottom: 0;
     background: rgba(255,255,255,0.05);
 }
+
+/* BUFFER FILL - Gray bar showing preloaded data */
+#buffer-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+    background: rgba(255,255,255,0.3);
+    border-radius: 3px;
+    transform-origin: left center;
+    transform: scaleX(0);
+    z-index: 1;
+}
+
+/* PROGRESS FILL - Red bar showing current position */
 #progress-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
     height: 100%;
     width: 100%;
     background: linear-gradient(90deg, #ff3333 0%, #ff5555 100%);
     border-radius: 3px;
-    /* GPU-accelerated transform instead of width animation */
     transform-origin: left center;
     transform: scaleX(0);
-    /* Smooth transition for seeking */
     transition: transform 0.1s linear;
     will-change: transform;
+    z-index: 2;
 }
+
 #hud-badges {
     display: flex;
     align-items: center;
-    /* Fallback for Tizen 4.0 - use margin instead of gap */
 }
 #hud-badges > * {
     margin-right: 12px;
@@ -442,24 +500,93 @@ iframe {
     color: white;
     border-color: transparent;
 }
+.badge.speed {
+    background: linear-gradient(135deg, #4CAF50 0%, #388E3C 100%);
+    color: white;
+    border-color: transparent;
+}
+
+/* CONTROLS HINT - Color-coded buttons */
 #controls-hint {
     position: absolute;
     bottom: 50px;
     right: 60px;
-    font-size: 16px;
-    background: rgba(0,0,0,0.6);
+    font-size: 14px;
+    background: rgba(0,0,0,0.7);
     padding: 12px 18px;
     border-radius: 10px;
     border: 1px solid #333;
     display: flex;
-    /* Fallback for Tizen 4.0 - use margin instead of gap */
 }
-#controls-hint > span {
+.hint-item {
     margin-right: 20px;
+    display: flex;
+    align-items: center;
+    color: #aaa;
+    font-weight: 500;
 }
-#controls-hint > span:last-child {
+.hint-item:last-child {
     margin-right: 0;
 }
+.key {
+    margin-right: 6px;
+    font-size: 12px;
+}
+.key.red { color: #F44336; }
+.key.green { color: #4CAF50; }
+.key.yellow { color: #FFEB3B; }
+.key.blue { color: #2196F3; }
+
+/* VIDEO INFO OVERLAY */
+#video-info-overlay {
+    position: absolute;
+    top: 60px;
+    left: 60px;
+    right: 60px;
+    max-height: 50%;
+    background: rgba(0,0,0,0.92);
+    border-radius: 16px;
+    padding: 30px 40px;
+    z-index: 105;
+    border: 1px solid #333;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.info-content h2 {
+    margin: 0 0 15px 0;
+    font-size: 28px;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1.3;
+}
+.info-meta {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+    font-size: 16px;
+    color: #aaa;
+}
+.info-meta .separator {
+    margin: 0 12px;
+    color: #555;
+}
+#info-author {
+    color: #ff3333;
+    font-weight: 600;
+}
+#info-description {
+    margin: 0;
+    font-size: 15px;
+    color: #888;
+    line-height: 1.6;
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+#info-description::-webkit-scrollbar { width: 4px; }
+#info-description::-webkit-scrollbar-track { background: transparent; }
+#info-description::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
 
 /* TOAST */
 #toast {
@@ -491,13 +618,11 @@ iframe {
     left: 0;
     width: 100%;
     height: 100%;
-    /* Fallback for Tizen 4.0 which doesn't support backdrop-filter */
     background: rgba(0,0,0,0.95);
     z-index: 200;
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Progressive enhancement for newer Tizen versions */
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
@@ -548,11 +673,11 @@ iframe {
 .modal input:focus {
     border-color: #ff3333;
     outline: none;
+    box-shadow: 0 0 10px rgba(255,51,51,0.3);
 }
 .button-row {
     display: flex;
     margin-top: 35px;
-    /* Fallback for Tizen 4.0 - use margin instead of gap */
 }
 .button-row > button {
     margin-right: 15px;
@@ -583,11 +708,6 @@ iframe {
     transform: scale(1.02);
     outline: none;
 }
-.modal input:focus {
-    border-color: #ff3333;
-    outline: none;
-    box-shadow: 0 0 10px rgba(255,51,51,0.3);
-}
 
 /* LOADING */
 .loading-spinner {
@@ -609,9 +729,6 @@ iframe {
     border-radius: 50%;
     display: inline-block;
     animation: spin 1s infinite linear;
-}
-@keyframes spin {
-    100% { transform: rotate(360deg); }
 }
 
 /* EMPTY STATE */

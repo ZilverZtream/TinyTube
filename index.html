@@ -34,19 +34,47 @@
     <div id="player-layer" class="hidden">
         <video id="native-player" width="100%" height="100%"></video>
         <div id="enforcement-container"></div>
+
+        <!-- Buffering Spinner Overlay -->
+        <div id="buffering-spinner" class="hidden">
+            <div class="buffering-icon"></div>
+        </div>
+
         <div id="player-hud">
             <h1 id="player-title"></h1>
             <div id="player-time-row">
                 <span id="curr-time">0:00</span>
-                <div id="progress-bar"><div id="progress-fill"></div></div>
+                <div id="progress-bar">
+                    <div id="buffer-fill"></div>
+                    <div id="progress-fill"></div>
+                </div>
                 <span id="total-time">0:00</span>
             </div>
             <div id="hud-badges">
                 <span id="sub-badge" class="badge">SUBSCRIBE</span>
+                <span id="speed-badge" class="badge speed hidden">1x</span>
                 <span id="sponsor-badge" class="badge hidden">SPONSOR SKIP</span>
             </div>
             <div id="controls-hint">
-                <span style="color:#2196F3">■ Sub</span> &nbsp; <span style="color:#F44336">■ Mode</span>
+                <span class="hint-item"><span class="key red">■</span> Mode</span>
+                <span class="hint-item"><span class="key green">■</span> Speed</span>
+                <span class="hint-item"><span class="key yellow">■</span> Info</span>
+                <span class="hint-item"><span class="key blue">■</span> Sub</span>
+            </div>
+        </div>
+
+        <!-- Video Info Overlay -->
+        <div id="video-info-overlay" class="hidden">
+            <div class="info-content">
+                <h2 id="info-title">Video Title</h2>
+                <div class="info-meta">
+                    <span id="info-author">Channel Name</span>
+                    <span class="separator">•</span>
+                    <span id="info-views">0 views</span>
+                    <span class="separator">•</span>
+                    <span id="info-date">Jan 1, 2024</span>
+                </div>
+                <p id="info-description">Video description...</p>
             </div>
         </div>
     </div>
