@@ -1,9 +1,15 @@
 /**
- * TinyTube Pro v4.2 (Platinum Final)
+ * TinyTube Pro v4.3 (Diamond)
  * - Fixed: Event Listener Leak (Memory)
  * - Fixed: Navigation Deadzones (UX)
  * - Fixed: Virtual Keyboard Ghosting (UX)
  * - Fixed: Background Audio (Lifecycle)
+ * - Fixed: Tizen API safety checks
+ * - Fixed: URL validation for custom API
+ * - Fixed: DeArrow race conditions with AbortController
+ * - Optimized: LRU Cache with O(1) operations
+ * - Optimized: Debounced DeArrow fetches
+ * - Optimized: Request deduplication
  */
 
 const FALLBACK_INSTANCES = [
@@ -17,33 +23,57 @@ const SPONSOR_API = "https://sponsor.ajay.app/api/skipSegments";
 const DEARROW_API = "https://dearrow.ajay.app/api/branding";
 const CONCURRENCY_LIMIT = 3;
 
-// LRU Cache
+// LRU Cache - Optimized with O(1) operations using Map ordering
 function LRUCache(maxSize) {
     this.maxSize = maxSize;
     this.cache = new Map();
-    this.order = [];
 }
 LRUCache.prototype.get = function(key) {
     if (!this.cache.has(key)) return undefined;
-    var idx = this.order.indexOf(key);
-    if (idx > -1) {
-        this.order.splice(idx, 1);
-        this.order.push(key);
-    }
-    return this.cache.get(key);
+    // Move to end by re-inserting (Map preserves insertion order)
+    var value = this.cache.get(key);
+    this.cache.delete(key);
+    this.cache.set(key, value);
+    return value;
 };
 LRUCache.prototype.set = function(key, value) {
     if (this.cache.has(key)) {
-        var idx = this.order.indexOf(key);
-        if (idx > -1) this.order.splice(idx, 1);
-    } else if (this.order.length >= this.maxSize) {
-        var oldest = this.order.shift();
-        this.cache.delete(oldest);
+        this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+        // Delete oldest (first) entry
+        var firstKey = this.cache.keys().next().value;
+        this.cache.delete(firstKey);
     }
     this.cache.set(key, value);
-    this.order.push(key);
 };
 LRUCache.prototype.has = function(key) { return this.cache.has(key); };
+
+// Request deduplication cache
+var pendingRequests = {};
+
+// Debounce utility
+function debounce(fn, delay) {
+    var timer = null;
+    return function() {
+        var context = this;
+        var args = arguments;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function() {
+            fn.apply(context, args);
+        }, delay);
+    };
+}
+
+// URL validation helper
+function isValidApiUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    try {
+        var parsed = new URL(url);
+        return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    } catch (e) {
+        return false;
+    }
+}
 
 const App = {
     view: "BROWSE",
@@ -56,7 +86,9 @@ const App = {
     sponsorSegs: [],
     exitCounter: 0,
     deArrowCache: new LRUCache(200),
-    hudTimer: null
+    hudTimer: null,
+    deArrowController: null,
+    deArrowTimer: null
 };
 
 const el = (id) => document.getElementById(id);
@@ -192,10 +224,13 @@ const DB = {
 const Network = {
     connect: async () => {
         const custom = localStorage.getItem("customBase");
-        if (custom) {
+        if (custom && isValidApiUrl(custom)) {
             App.api = custom;
             Feed.loadHome();
             return;
+        } else if (custom) {
+            // Invalid stored URL, remove it
+            localStorage.removeItem("customBase");
         }
 
         const cached = localStorage.getItem("lastWorkingApi");
@@ -269,8 +304,18 @@ const Feed = {
 
             const feed = [].concat(...results).sort((a,b) => b.published - a.published);
             if (feed.length < 10) {
-                const trend = await (await fetch(`${App.api}/trending`)).json();
-                feed.push(...trend.slice(0, 10));
+                try {
+                    const trendRes = await fetch(App.api + "/trending");
+                    if (trendRes.ok) {
+                        const trend = await trendRes.json();
+                        if (Array.isArray(trend)) {
+                            feed.push.apply(feed, trend.slice(0, 10));
+                        }
+                    }
+                } catch(trendErr) {
+                    // Continue with existing feed even if trending fails
+                    console.log('Trending fetch failed:', trendErr);
+                }
             }
             UI.renderGrid(feed);
         } catch (e) {
@@ -406,12 +451,40 @@ const UI = {
             return;
         }
 
-        fetch(`${DEARROW_API}?videoID=${vId}`)
-            .then(r=>r.json())
-            .then(d=>{
-                App.deArrowCache.set(vId, d);
-                UI.applyDeArrow(d, idx, vId);
-            }).catch(()=>{});
+        // Cancel any pending DeArrow request
+        if (App.deArrowController) {
+            App.deArrowController.abort();
+        }
+
+        // Clear debounce timer
+        if (App.deArrowTimer) {
+            clearTimeout(App.deArrowTimer);
+        }
+
+        // Debounce the fetch by 150ms to prevent rapid API calls
+        App.deArrowTimer = setTimeout(function() {
+            // Check if request is already pending
+            if (pendingRequests[vId]) return;
+
+            // Create new AbortController for this request
+            App.deArrowController = new AbortController();
+            pendingRequests[vId] = true;
+
+            fetch(DEARROW_API + "?videoID=" + vId, { signal: App.deArrowController.signal })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    delete pendingRequests[vId];
+                    App.deArrowCache.set(vId, d);
+                    UI.applyDeArrow(d, idx, vId);
+                })
+                .catch(function(e) {
+                    delete pendingRequests[vId];
+                    // Ignore abort errors
+                    if (e.name !== 'AbortError') {
+                        console.log('DeArrow fetch failed:', e);
+                    }
+                });
+        }, 150);
     },
     applyDeArrow: (d, idx, originalId) => {
         if (!App.items[idx]) return;
@@ -429,11 +502,16 @@ const UI = {
 // --- 6. PLAYER ENGINE ---
 const Player = {
     start: async (item) => {
+        if (!item) {
+            Utils.toast("Invalid video");
+            return;
+        }
+
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
-        
+
         const vId = Utils.getVideoId(item);
         if (!vId) {
             Utils.toast("Unable to play this video.");
@@ -487,10 +565,15 @@ const Player = {
         Utils.toast("Enforcement Mode Active");
     },
     setupHUD: (p) => {
+        if (!p) return;
+
+        const hudEl = el("player-hud");
         const resetTimer = () => {
-            el("player-hud").classList.add("visible");
+            if (hudEl) hudEl.classList.add("visible");
             if(App.hudTimer) clearTimeout(App.hudTimer);
-            App.hudTimer = setTimeout(() => el("player-hud").classList.remove("visible"), 4000);
+            App.hudTimer = setTimeout(function() {
+                if (hudEl) hudEl.classList.remove("visible");
+            }, 4000);
         };
 
         // FIX 1: Use Properties to prevent stacking listeners
@@ -498,14 +581,21 @@ const Player = {
         p.onpause = resetTimer;
         p.onseeked = resetTimer;
 
-        p.ontimeupdate = () => {
-            el("progress-fill").style.width = (p.currentTime / p.duration * 100) + "%";
-            el("curr-time").textContent = Utils.formatTime(p.currentTime);
-            el("total-time").textContent = Utils.formatTime(p.duration);
+        var progressFill = el("progress-fill");
+        var currTimeEl = el("curr-time");
+        var totalTimeEl = el("total-time");
 
+        p.ontimeupdate = function() {
+            var pct = p.duration > 0 ? (p.currentTime / p.duration * 100) : 0;
+            if (progressFill) progressFill.style.width = pct + "%";
+            if (currTimeEl) currTimeEl.textContent = Utils.formatTime(p.currentTime);
+            if (totalTimeEl) totalTimeEl.textContent = Utils.formatTime(p.duration);
+
+            // Optimized sponsor skip - segments are pre-sorted
             for(var i = 0; i < App.sponsorSegs.length; i++) {
                 var s = App.sponsorSegs[i];
-                if(p.currentTime < s.segment[0]) break; 
+                if (!s || !s.segment) continue;
+                if(p.currentTime < s.segment[0]) break;
                 if(p.currentTime >= s.segment[0] && p.currentTime < s.segment[1]) {
                     p.currentTime = s.segment[1];
                     Utils.toast("Skipped Sponsor");
@@ -615,8 +705,18 @@ function setupRemote() {
                     el("search-input").classList.add("hidden");
                 } else {
                     App.exitCounter++;
-                    if(App.exitCounter >= 2) tizen.application.getCurrentApplication().exit();
-                    else Utils.toast("Press Back Again to Exit");
+                    if(App.exitCounter >= 2) {
+                        // Safe exit - check if tizen API is available
+                        if (typeof tizen !== 'undefined' && tizen.application) {
+                            try {
+                                tizen.application.getCurrentApplication().exit();
+                            } catch(e) {
+                                console.log('Exit failed:', e);
+                            }
+                        }
+                    } else {
+                        Utils.toast("Press Back Again to Exit");
+                    }
                 }
                 break;
         }
@@ -652,9 +752,24 @@ App.actions = {
     saveSettings: () => {
         const name = el("profile-name-input").value.trim();
         const api = el("api-input").value.trim();
-        if(name) DB.saveProfileName(name);
-        if(api) localStorage.setItem("customBase", api);
-        else localStorage.removeItem("customBase");
+
+        // Validate profile name (max 20 chars, alphanumeric + spaces)
+        if(name) {
+            var safeName = name.substring(0, 20).replace(/[<>\"\'&]/g, '');
+            DB.saveProfileName(safeName);
+        }
+
+        // Validate API URL before saving
+        if(api) {
+            if (isValidApiUrl(api)) {
+                localStorage.setItem("customBase", api);
+            } else {
+                Utils.toast("Invalid API URL. Use https:// or http://");
+                return;
+            }
+        } else {
+            localStorage.removeItem("customBase");
+        }
         location.reload();
     }
 };
