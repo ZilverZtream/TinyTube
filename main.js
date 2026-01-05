@@ -482,6 +482,7 @@ const UI = {
     renderGrid: (data) => {
         App.items = data || [];
         const grid = el("grid-container");
+        if (App.lazyObserver) App.lazyObserver.disconnect();
         grid.textContent = "";
 
         for (const key in App.pendingDeArrow) {
@@ -565,8 +566,10 @@ const UI = {
         }
         grid.appendChild(frag);
 
-        App.focus = { area: "grid", index: 0 };
-        UI.updateFocus();
+        if (App.focus.area !== "search" && App.focus.area !== "settings") {
+            App.focus = { area: "grid", index: 0 };
+            UI.updateFocus();
+        }
     },
     updateFocus: () => {
         document.querySelectorAll(".focused").forEach(e => e.classList.remove("focused"));
@@ -839,7 +842,7 @@ const Player = {
         let seekAmount = SEEK_INTERVALS[0]; // 10s default
 
         if (accelerated) {
-            const heldTime = Date.now() - App.seekKeyTime;
+            const heldTime = performance.now() - App.seekKeyTime;
             if (heldTime > 2000) {
                 seekAmount = SEEK_INTERVALS[2]; // 60s
             } else if (heldTime > SEEK_ACCELERATION_DELAY) {
@@ -953,7 +956,7 @@ function setupRemote() {
                     if (App.playerMode === "BYPASS") {
                         if (App.seekKeyHeld !== 'left') {
                             App.seekKeyHeld = 'left';
-                            App.seekKeyTime = Date.now();
+                            App.seekKeyTime = performance.now();
                         }
                         Player.seek('left', App.seekKeyHeld === 'left');
                     }
@@ -962,7 +965,7 @@ function setupRemote() {
                     if (App.playerMode === "BYPASS") {
                         if (App.seekKeyHeld !== 'right') {
                             App.seekKeyHeld = 'right';
-                            App.seekKeyTime = Date.now();
+                            App.seekKeyTime = performance.now();
                         }
                         Player.seek('right', App.seekKeyHeld === 'right');
                     }
