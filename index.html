@@ -55,6 +55,10 @@
                 <span id="speed-badge" class="badge speed hidden">1x</span>
                 <span id="sponsor-badge" class="badge hidden">SPONSOR SKIP</span>
             </div>
+            <div id="up-next" class="hidden">
+                <div class="up-next-header">Up Next</div>
+                <div id="up-next-list"></div>
+            </div>
             <div id="player-controls">
                 <button class="control-btn" id="control-play" type="button">
                     <span class="control-icon">⏯</span>
@@ -160,6 +164,13 @@
                     <option value="720">720p</option>
                     <option value="1080">1080p</option>
                 </select>
+            </div>
+            <div class="setting-group">
+                <label>Autoplay</label>
+                <div class="row toggle-row">
+                    <input id="autoplay-toggle" type="checkbox" />
+                    <span>Play next video automatically</span>
+                </div>
             </div>
             <div class="button-row">
                 <button id="save-btn" class="focused-btn" onclick="App.actions.saveSettings()">SAVE</button>
