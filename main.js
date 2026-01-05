@@ -170,12 +170,9 @@ const Utils = {
     },
     getVideoId: (item) => {
         if (!item) return null;
-        if (item.videoId) return item.videoId;
-        if (item.url) {
-            const v = item.url.match(/[?&]v=([^&]+)/);
-            if (v) return v[1];
-        }
-        return null;
+        var raw = item.videoId || (item.url && (item.url.match(/[?&]v=([^&]+)/) || [])[1]);
+        if (!raw) return null;
+        return /^[a-zA-Z0-9_-]{11}$/.test(raw) ? raw : null;
     },
     findSegment: (time) => {
         let l = 0, r = App.sponsorSegs.length - 1;
@@ -235,8 +232,8 @@ const Extractor = {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
 
-            if (data.playabilityStatus?.status !== "OK") {
-                throw new Error(data.playabilityStatus?.reason || "Unplayable");
+            if (!data.playabilityStatus || data.playabilityStatus.status !== "OK") {
+                throw new Error((data.playabilityStatus && data.playabilityStatus.reason) || "Unplayable");
             }
 
             const streamingData = data.streamingData;
@@ -244,23 +241,27 @@ const Extractor = {
 
             const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
 
-            let best = formats.filter(f => f.url && f.mimeType?.includes("video/mp4") && f.audioQuality)
-                              .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+            var best = formats.filter(function(f) { return f.url && f.mimeType && f.mimeType.indexOf("video/mp4") !== -1 && f.audioQuality; })
+                              .sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); })[0];
 
             if (!best) {
-                best = formats.filter(f => f.url && f.mimeType?.includes("video/mp4"))
-                              .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+                best = formats.filter(function(f) { return f.url && f.mimeType && f.mimeType.indexOf("video/mp4") !== -1; })
+                              .sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); })[0];
             }
 
-            if (!best?.url) throw new Error("No direct URL");
+            if (!best || !best.url) throw new Error("No direct URL");
 
-            const captions = data.captions?.playerCaptionsTracklistRenderer?.captionTracks?.map(c => ({
-                url: c.baseUrl + "&fmt=vtt",
-                language_code: c.languageCode,
-                name: c.name.simpleText || c.languageCode,
-                vttUrl: c.baseUrl + "&fmt=vtt"
-            })) || [];
+            var captionTracks = data.captions && data.captions.playerCaptionsTracklistRenderer && data.captions.playerCaptionsTracklistRenderer.captionTracks;
+            var captions = captionTracks ? captionTracks.map(function(c) {
+                return {
+                    url: c.baseUrl + "&fmt=vtt",
+                    language_code: c.languageCode,
+                    name: (c.name && c.name.simpleText) || c.languageCode,
+                    vttUrl: c.baseUrl + "&fmt=vtt"
+                };
+            }) : [];
 
+            var publishDate = data.microformat && data.microformat.playerMicroformatRenderer && data.microformat.playerMicroformatRenderer.publishDate;
             return {
                 url: best.url + "&alr=yes",
                 meta: {
@@ -268,9 +269,7 @@ const Extractor = {
                     author: data.videoDetails.author,
                     viewCount: data.videoDetails.viewCountText || data.videoDetails.viewCount || "0 views",
                     description: data.videoDetails.shortDescription || "",
-                    published: data.microformat?.playerMicroformatRenderer?.publishDate ? 
-                               (Date.parse(data.microformat.playerMicroformatRenderer.publishDate) / 1000) : 
-                               Date.now() / 1000,
+                    published: publishDate ? (Date.parse(publishDate) / 1000) : (Date.now() / 1000),
                     captions: captions
                 }
             };
@@ -289,6 +288,7 @@ const DB = {
         el("p-name").textContent = names[App.profileId];
         el("modal-profile-id").textContent = `#${App.profileId + 1}`;
         el("profile-name-input").value = names[App.profileId];
+        el("api-input").value = localStorage.getItem("customBase") || "";
         App.subsCache = null;
         App.subsCacheId = null;
         App.watchHistory = Utils.safeParse(localStorage.getItem(`tt_history_${App.profileId}`), {});
@@ -731,7 +731,7 @@ const Player = {
                 if (direct && direct.url) {
                     streamUrl = direct.url;
                     App.currentVideoData = direct.meta;
-                    if (direct.meta.captions?.length) Player.setupCaptions({captions: direct.meta.captions});
+                    if (direct.meta.captions && direct.meta.captions.length) Player.setupCaptions({captions: direct.meta.captions});
                     Utils.toast("Src: Direct (Exp)");
                 }
             } catch(e) { console.log("Innertube failed"); }
@@ -876,6 +876,12 @@ App.actions = {
         if(api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
         else localStorage.removeItem("customBase");
         location.reload();
+    },
+    switchProfile: () => {
+        App.profileId = (App.profileId + 1) % 3;
+        localStorage.setItem("tt_pid", App.profileId.toString());
+        DB.loadProfile();
+        Utils.toast("Switched to Profile #" + (App.profileId + 1));
     }
 };
 
@@ -895,7 +901,11 @@ const HUD = {
     },
     updateSpeedBadge: (speed) => {
         const b = el("speed-badge");
-        if(b) b.textContent = `${speed}x`;
+        if(b) {
+            b.textContent = speed + "x";
+            if(speed === 1) b.classList.add("hidden");
+            else b.classList.remove("hidden");
+        }
     },
     refreshPinned: () => {
         const overlayOpen = App.activeLayer !== "NONE" && App.activeLayer !== "CONTROLS";
@@ -942,6 +952,8 @@ const Comments = {
         Comments.state = { open: false, loading: false, nextPage: null, page: 1, videoId: null };
         Comments.elements.list.textContent = "";
         Comments.elements.footer.classList.add("hidden");
+        Comments.elements.count.textContent = "0 comments";
+        Comments.elements.page.textContent = "Page 1";
     },
     open: async () => {
         if(!App.currentVideoId || !App.api) return;
@@ -977,18 +989,29 @@ const Comments = {
         try {
             const u = `${App.api}/comments/${App.currentVideoId}${Comments.state.nextPage ? "?continuation="+Comments.state.nextPage : ""}`;
             const res = await Utils.fetchWithTimeout(u);
+            if(!res.ok) throw new Error("HTTP " + res.status);
             const data = await res.json();
             if(data.comments) {
-                if(Comments.state.page===1) Comments.elements.list.textContent = "";
-                data.comments.forEach(c => {
-                    const d = Utils.create("div", "comment-item");
-                    d.innerHTML = `<div class="comment-author">${c.author}</div><div class="comment-text">${c.content}</div>`;
+                if(Comments.state.page===1) {
+                    Comments.elements.list.textContent = "";
+                    const count = data.commentCount || data.comments.length;
+                    Comments.elements.count.textContent = count + " comment" + (count !== 1 ? "s" : "");
+                }
+                Comments.elements.page.textContent = "Page " + Comments.state.page;
+                data.comments.forEach(function(c) {
+                    var d = Utils.create("div", "comment-item");
+                    var author = Utils.create("div", "comment-author");
+                    author.textContent = c.author || "";
+                    var text = Utils.create("div", "comment-text");
+                    text.textContent = c.content || c.contentText || "";
+                    d.appendChild(author);
+                    d.appendChild(text);
                     Comments.elements.list.appendChild(d);
                 });
             }
             Comments.state.nextPage = data.continuation;
             Comments.state.page++;
-        } catch { Comments.elements.list.textContent = "Error loading comments."; }
+        } catch(e) { Comments.elements.list.textContent = "Error loading comments."; }
         Comments.state.loading = false;
         if(!Comments.state.nextPage) Comments.elements.footer.classList.add("hidden");
     },
@@ -1022,8 +1045,12 @@ const Captions = {
         Captions.updateFocus();
     },
     updateFocus: () => {
-        Captions.buttons.forEach((b, i) => {
-            if(i === Captions.index) { b.classList.add("focused"); b.scrollIntoView({block:"center"}); }
+        Captions.buttons.forEach(function(b, i) {
+            if(i === Captions.index) {
+                b.classList.add("focused");
+                try { b.scrollIntoView({block:"center"}); }
+                catch(e) { b.scrollIntoView(false); }
+            }
             else b.classList.remove("focused");
         });
     },
