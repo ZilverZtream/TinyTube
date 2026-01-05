@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="icon.png" alt="TinyTube Logo" width="128" height="128">
+  <img src="default.png" alt="TinyTube Logo" width="128" height="128">
 </div>
 
 # TinyTube Pro (v11.1)
