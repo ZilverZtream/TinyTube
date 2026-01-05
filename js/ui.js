@@ -64,6 +64,16 @@ const CardPool = {
         element.id = '';
         element.removeAttribute('style');
 
+        // FIX: Reset image display state to prevent "Invisible Thumbnail" bug
+        // When handleImgError sets display:none, it persists across card reuse
+        const img = element.querySelector('img');
+        if (img) {
+            img.style.display = ''; // Clear any display:none from error handler
+            img.onerror = null;      // Clear old error handlers
+            img.src = 'icon.png';    // Reset to placeholder
+            img.removeAttribute('data-src'); // Clear lazy-load marker
+        }
+
         const isChannel = element.classList.contains('channel-card');
         element.dataset.poolType = isChannel ? 'channel' : 'video';
         // Return to pool if under limit
@@ -164,13 +174,24 @@ const VirtualScroll = {
         const scrollTop = container.scrollTop;
         this.containerHeight = container.clientHeight;
 
-        // Estimate items per row (4 columns with 23% width + margins)
-        const itemsPerRow = 4;
+        // FIX: Calculate itemsPerRow dynamically instead of hardcoding to 4
+        // This prevents "pop-in" glitches if CSS changes (responsive layouts, 4K screens)
+        let itemsPerRow = 4; // Fallback default
+        const firstCard = container.querySelector('.video-card, .channel-card');
+        if (firstCard && container.clientWidth > 0) {
+            const cardWidth = firstCard.offsetWidth;
+            if (cardWidth > 0) {
+                itemsPerRow = Math.floor(container.clientWidth / cardWidth);
+                // Ensure at least 1 card per row
+                if (itemsPerRow < 1) itemsPerRow = 1;
+            }
+        }
 
         // Estimate card height (thumbnail + meta, roughly 250px)
-        if (this.itemHeight === 0) {
-            const firstCard = container.querySelector('.video-card, .channel-card');
-            this.itemHeight = firstCard ? firstCard.offsetHeight + 25 : 275; // +25 for margin
+        if (this.itemHeight === 0 && firstCard) {
+            this.itemHeight = firstCard.offsetHeight + 25; // +25 for margin
+        } else if (this.itemHeight === 0) {
+            this.itemHeight = 275; // Fallback
         }
 
         const rowHeight = this.itemHeight;
@@ -358,8 +379,10 @@ const UI = {
                 currentCards.forEach(card => {
                     const idx = parseInt(card.id.split('-')[1], 10);
                     if (idx < start || idx >= end) {
-                        // Card is outside visible range, return to pool
-                        CardPool.release(card);
+                        // FIX: Skip focus handling during scroll to prevent micro-stutters
+                        // Large scroll jumps (Page Down) can release 16+ cards at once
+                        // Focus recalculation should happen AFTER the scroll completes
+                        CardPool.release(card, true);
                     } else {
                         existingCards.add(idx);
                     }
