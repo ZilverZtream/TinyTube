@@ -549,7 +549,22 @@ const Utils = {
         await Promise.all(executing);
         return results;
     },
-    isValidUrl: (s) => { try { return s.startsWith("http"); } catch { return false; } },
+    isValidUrl: (s) => {
+        try {
+            const url = new URL(s);
+            return url.protocol === "https:";
+        } catch {
+            return false;
+        }
+    },
+    normalizeUrl: (s) => {
+        try {
+            const url = new URL(s);
+            return url.toString().replace(/\/+$/, "");
+        } catch {
+            return s;
+        }
+    },
     toast: (msg) => {
         const t = el("toast");
         if (!t) return;

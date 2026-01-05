@@ -338,8 +338,9 @@ const Extractor = {
 const Network = {
     connect: async () => {
         const custom = SafeStorage.getItem("customBase");
-        if (custom && Utils.isValidUrl(custom)) {
-            TinyTube.App.api = custom;
+        const normalizedCustom = custom ? Utils.normalizeUrl(custom) : "";
+        if (normalizedCustom && Utils.isValidUrl(normalizedCustom)) {
+            TinyTube.App.api = normalizedCustom;
             el("backend-status").textContent = "API: Custom";
         } else {
             TinyTube.App.api = CONFIG.PRIMARY_API;

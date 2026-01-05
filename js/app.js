@@ -155,9 +155,18 @@ App.actions = {
         const api = el("api-input").value.trim();
         const maxRes = el("max-res-select").value;
         const autoplayEnabled = el("autoplay-toggle").checked;
+        let apiError = false;
         if(name) DB.saveProfileName(name);
-        if(api && Utils.isValidUrl(api)) SafeStorage.setItem("customBase", api);
-        else SafeStorage.removeItem("customBase");
+        if (api) {
+            if (Utils.isValidUrl(api)) {
+                SafeStorage.setItem("customBase", Utils.normalizeUrl(api));
+            } else {
+                apiError = true;
+                SafeStorage.removeItem("customBase");
+            }
+        } else {
+            SafeStorage.removeItem("customBase");
+        }
         if (maxRes) SafeStorage.setItem("tt_max_res", maxRes);
         const oldAutoplay = App.autoplayEnabled;
         App.autoplayEnabled = autoplayEnabled;
@@ -175,7 +184,11 @@ App.actions = {
 
         // Reconnect to API and reload feed
         Network.connect();
-        Utils.toast("Settings saved");
+        if (apiError) {
+            Utils.toast("Custom API must use https://");
+        } else {
+            Utils.toast("Settings saved");
+        }
     },
     switchProfile: () => {
         App.profileId = (App.profileId + 1) % 3;
