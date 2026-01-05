@@ -360,7 +360,7 @@ const UI = {
         img.src = "icon.png";
     },
     renderGrid: (data) => {
-        const items = (data || []).filter(item => item && ["video", "channel", "shortVideo"].includes(item.type));
+        const items = (data || []).filter(item => item && ["video", "channel", "shortVideo", "playlist"].includes(item.type));
         TinyTube.App.items = items;
         const grid = el("grid-container");
         if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.disconnect();
@@ -491,11 +491,73 @@ const UI = {
                     } else if (subTag) {
                         subTag.classList.add("hidden");
                     }
+                } else if (item.type === "playlist" && TinyTube.App.videoCardTemplate) {
+                    if (!div) {
+                        div = TinyTube.App.videoCardTemplate.cloneNode(true);
+                    }
+                    div.classList.add("video-card", "playlist-card");
+                    div.classList.remove("channel-card");
+                    div.dataset.poolType = "video";
+                    div.id = `card-${idx}`;
+
+                    let thumbUrl = "icon.png";
+                    if (item.playlistThumbnail) thumbUrl = item.playlistThumbnail;
+                    else if (item.playlistThumbnailUrl) thumbUrl = item.playlistThumbnailUrl;
+                    else if (item.thumbnail) thumbUrl = item.thumbnail;
+                    else if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
+
+                    const img = div.querySelector('.thumb');
+                    if (img) {
+                        img.onerror = UI.handleImgError;
+                        if (useLazy && idx > 7) {
+                            img.dataset.src = thumbUrl;
+                            img.src = "icon.png";
+                            if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
+                        } else {
+                            img.src = thumbUrl;
+                            img.removeAttribute("data-src");
+                        }
+                    }
+
+                    const durationBadge = div.querySelector('.duration-badge');
+                    const rawCount = item.videoCount ?? item.itemCount ?? item.videoCountText ?? (Array.isArray(item.videos) ? item.videos.length : null);
+                    let countText = "";
+                    if (typeof rawCount === "number") countText = `${rawCount} videos`;
+                    else if (typeof rawCount === "string") countText = rawCount;
+                    if (durationBadge) {
+                        if (countText) {
+                            durationBadge.textContent = countText;
+                            durationBadge.classList.remove("hidden");
+                        } else {
+                            durationBadge.textContent = "";
+                            durationBadge.classList.add("hidden");
+                        }
+                    }
+
+                    const liveBadge = div.querySelector('.live-badge');
+                    if (liveBadge) liveBadge.classList.add("hidden");
+
+                    const resumeBadge = div.querySelector('.resume-badge');
+                    if (resumeBadge) resumeBadge.classList.add("hidden");
+
+                    const h3 = div.querySelector('h3');
+                    if (h3) {
+                        h3.textContent = item.title || '';
+                        h3.id = `title-${idx}`;
+                    }
+
+                    const p = div.querySelector('p');
+                    if (p) {
+                        let info = item.author || "";
+                        if (countText) info += (info ? " • " : "") + countText;
+                        p.textContent = info;
+                    }
                 } else if (TinyTube.App.videoCardTemplate) {
                     if (!div) {
                         div = TinyTube.App.videoCardTemplate.cloneNode(true);
                     }
                     div.classList.add("video-card");
+                    div.classList.remove("playlist-card");
                     div.classList.remove("channel-card");
                     div.dataset.poolType = "video";
                     div.id = `card-${idx}`;
@@ -589,6 +651,31 @@ const UI = {
                         div.appendChild(img);
                         div.appendChild(TinyTube.Utils.create("h3", null, item.author));
                         if (TinyTube.DB.isSubbed(item.authorId)) div.appendChild(TinyTube.Utils.create("div", "sub-tag", "SUBSCRIBED"));
+                    } else if (item.type === "playlist") {
+                        div.classList.add("playlist-card");
+                        const tc = TinyTube.Utils.create("div", "thumb-container");
+                        const img = TinyTube.Utils.create("img", "thumb");
+                        img.onerror = UI.handleImgError;
+                        if (useLazy && idx > 7) {
+                            img.dataset.src = thumbUrl;
+                            img.src = "icon.png";
+                            if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
+                        } else { img.src = thumbUrl; }
+                        tc.appendChild(img);
+                        const rawCount = item.videoCount ?? item.itemCount ?? item.videoCountText ?? (Array.isArray(item.videos) ? item.videos.length : null);
+                        let countText = "";
+                        if (typeof rawCount === "number") countText = `${rawCount} videos`;
+                        else if (typeof rawCount === "string") countText = rawCount;
+                        if (countText) tc.appendChild(TinyTube.Utils.create("span", "duration-badge", countText));
+                        div.appendChild(tc);
+                        const meta = TinyTube.Utils.create("div", "meta");
+                        const h3 = TinyTube.Utils.create("h3", null, item.title);
+                        h3.id = `title-${idx}`;
+                        meta.appendChild(h3);
+                        let info = item.author || "";
+                        if (countText) info += (info ? " • " : "") + countText;
+                        meta.appendChild(TinyTube.Utils.create("p", null, info));
+                        div.appendChild(meta);
                     } else {
                         const tc = TinyTube.Utils.create("div", "thumb-container");
                         const img = TinyTube.Utils.create("img", "thumb");
