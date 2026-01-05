@@ -2,49 +2,56 @@
   <img src="default.png" alt="TinyTube Logo" width="128" height="128">
 </div>
 
-# TinyTube Pro (v11.1)
+# TinyTube Pro (v11.4)
 
-**YouTube Client for Legacy Tizen TVs (2017+).**
+**YouTube Client for Samsung Tizen TVs (2017–2026).**
 
-TinyTube Pro is a high-performance, ad-free YouTube client engineered specifically for Tizen 4.0 (Chromium 56) environments. It bridges the gap between ancient hardware and modern YouTube anti-bot defenses using advanced client-side extraction and stealth emulation.
+TinyTube Pro is a performance-focused YouTube client built for Samsung Tizen TVs from 2017 through 2026. It combines an Invidious-backed feed with direct YouTube playback extraction and a native embed fallback to keep older TVs usable.
 
-![Version](https://img.shields.io/badge/version-11.1.0-blue) ![Platform](https://img.shields.io/badge/platform-Tizen%204.0%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange)
+![Version](https://img.shields.io/badge/version-11.4.0-blue) ![Platform](https://img.shields.io/badge/platform-Tizen%202017%E2%80%932026-green) ![License](https://img.shields.io/badge/license-MIT-orange)
 
 ---
 
 ## 🚀 Key Features
 
-### 🛡️ "Stealth Mode" Engine (New in v10+)
-* **Android Client Emulation:** Impersonates the official YouTube Android App (v20.51.39) to bypass Google's "Sign in to confirm you're not a bot" checks.
-* **Direct 1080p Streaming:** Fetches unthrottled MP4/DASH streams directly from Google servers using the internal Protobuf-JSON API (`/youtubei/v1`).
-* **No API Keys Required:** Uses the "Stealth" method (no public key in URL) to remain undetected.
+### 🛡️ Playback & Extraction
+* **Innertube Direct Playback:** Uses YouTube’s `/youtubei/v1/player` endpoint with Android client parameters (v20.51.39).
+* **Cipher Breaker + Engine:** Auto-downloads `player.js` to build a decipher sequence, with cached fallbacks.
+* **Native Embed Fallback:** Falls back to the YouTube iframe player for edge cases or restricted videos.
 
 ### ⚡ Performance
-* **60 FPS UI Loop:** Render loop decoupled from network activity using `requestAnimationFrame`.
-* **O(1) LRU Caching:** Custom Double-Linked List memory management for instant navigation.
-* **Binary Search Skipping:** Instant SponsorBlock segment processing (O(log n)).
-* **Request Deduplication:** Prevents network congestion when mashing remote buttons.
+* **Virtualized Grid:** Card pooling + virtual scroll to reduce DOM load.
+* **Service Worker Caching:** Short-lived API cache for trending data.
+* **Web Worker Parsing:** Large JSON responses parsed off the main thread.
+* **Preload Next Video:** Autoplay prefetch at ~80% playback.
 
 ### 📺 Playback Experience
-* **Ad-Free:** Native blocking of all video ads and tracking pixels.
 * **SponsorBlock:** Auto-skips Sponsors, Intros, Outros, and Self-Promotion.
 * **DeArrow:** Replaces clickbait thumbnails and titles with community-crowdsourced accurate versions.
-* **Resume Watching:** Locally saves playback position for the last 50 videos.
-* **Playback Speed:** Toggle between 0.5x, 1.0x, 1.25x, 1.5x, and 2.0x.
-* **Captions:** Full subtitle support (direct from Google).
+* **Resume Watching:** Stores playback position per profile.
+* **Playback Speed:** 0.5x → 2.0x.
+* **Quality Picker:** Manual stream quality selection.
+* **Chapters:** Parse chapter timestamps from descriptions.
+* **Captions:** VTT subtitle support pulled from YouTube.
+
+### 🧭 Browsing & Library
+* **Home / Trending / Subscriptions:** Invidious-backed feeds with trending categories.
+* **Search Filters:** Sort, date, duration, and type filters.
+* **Watch Later & History:** Local queues with profile separation.
+* **Profiles:** Three local profiles with independent settings.
 
 ---
 
-## 🏗️ Architecture: "The 2026 Standard"
+## 🏗️ Architecture
 
-TinyTube Pro uses a **3-Stage Waterfall Strategy** to guarantee playback resilience:
+TinyTube Pro uses a **3-Stage Waterfall Strategy** to keep playback reliable:
 
 1.  **Stage 1: Primary (Invidious Perditum)**
     * Connects to the high-health `inv.perditum.com` instance.
     * Fastest response time, strips tracking, delivers clean proxy URLs.
 2.  **Stage 2: Secondary (Innertube Stealth)**
-    * If the API fails, the app switches to **Client-Side Extraction**.
-    * It emulates an Android device to negotiate directly with YouTube's private API.
+    * If the API fails, the app switches to **Client-Side Extraction** via `/youtubei/v1/player`.
+    * Emulates the Android client and resolves stream signatures on-device.
 3.  **Stage 3: Fallback (Native Embed)**
     * If all else fails (e.g., Age-Gated content), it loads the official YouTube Iframe player.
 
@@ -92,7 +99,9 @@ Designed for standard IR Remotes.
 The app is zero-config out of the box, but you can customize it via the **Settings** tab (Gear Icon):
 
 * **Profile Name:** Change the display name for the local user.
-* **Custom API:** Override the internal fallback list with your own Invidious instance URL.
+* **Custom API:** Override the default Invidious API base URL.
+* **Max Resolution:** Set a preferred top quality for stream selection.
+* **Autoplay:** Enable or disable auto-playback.
 * **Switch Profile:** Toggle between 3 local profiles (separate Watch History/Subs).
 
 ---
