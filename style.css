@@ -183,6 +183,7 @@ body {
     position: relative;
     box-sizing: border-box;
     contain: layout;
+    height: 320px;
 }
 
 .video-card.focused, .channel-card.focused {

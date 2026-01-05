@@ -230,6 +230,9 @@ const EventBus = (() => {
 })();
 
 const el = (id) => {
+    if (typeof id === "string" && (id.startsWith("card-") || id.startsWith("title-"))) {
+        return document.getElementById(id);
+    }
     const app = TinyTube.App;
     // Check cache first for frequently accessed elements
     if (app && app.cachedElements && app.cachedElements[id]) {
@@ -247,30 +250,39 @@ const SafeStorage = {
     setItem: (key, value) => {
         try {
             localStorage.setItem(key, value);
-            return true;
+            return { success: true, trimmedHistory: null, trimmedKey: null };
         } catch (e) {
+            let cleanup = null;
             if (e.name === CONFIG.LOCALSTORAGE_QUOTA_EXCEEDED || e.name === 'QuotaExceededError') {
                 console.log(`localStorage quota exceeded for key: ${key}`);
                 // Implement LRU eviction strategy
-                if (SafeStorage.freeUpSpace(key)) {
+                cleanup = SafeStorage.freeUpSpace(key, value);
+                if (cleanup && cleanup.freed) {
+                    let retryValue = value;
+                    if (cleanup.trimmedKey === key && cleanup.trimmedHistory) {
+                        retryValue = JSON.stringify(cleanup.trimmedHistory);
+                    }
                     // Retry after cleanup
                     try {
-                        localStorage.setItem(key, value);
-                        return true;
+                        localStorage.setItem(key, retryValue);
+                        return { success: true, trimmedHistory: cleanup.trimmedHistory, trimmedKey: cleanup.trimmedKey };
                     } catch (retryError) {
                         console.log(`localStorage quota still exceeded after cleanup`);
                         Utils.toast("Storage full - data may not save");
+                        return { success: false, trimmedHistory: cleanup.trimmedHistory, trimmedKey: cleanup.trimmedKey };
                     }
                 }
             } else {
                 console.log(`localStorage error: ${e.message}`);
             }
-            return false;
+            return { success: false, trimmedHistory: cleanup ? cleanup.trimmedHistory : null, trimmedKey: cleanup ? cleanup.trimmedKey : null };
         }
     },
-    freeUpSpace: (currentKey) => {
+    freeUpSpace: (currentKey, currentValue = null) => {
         try {
             let freed = false;
+            let trimmedHistory = null;
+            let trimmedKey = null;
 
             // 1. Clear cipher cache if not the current key
             const cipherKey = CONFIG.CIPHER_CACHE_KEY;
@@ -283,9 +295,9 @@ const SafeStorage = {
             // 2. Clear oldest history entries (keep only last 25 instead of 50)
             for (let pid = 0; pid < 3; pid++) {
                 const historyKey = `tt_history_${pid}`;
-                if (currentKey === historyKey) continue;
-
-                const historyData = Utils.safeParse(localStorage.getItem(historyKey), {});
+                const historyData = historyKey === currentKey && currentValue
+                    ? Utils.safeParse(currentValue, {})
+                    : Utils.safeParse(localStorage.getItem(historyKey), {});
                 const entries = Object.entries(historyData);
                 if (entries.length > 25) {
                     // Sort by timestamp and keep only newest 25
@@ -294,6 +306,10 @@ const SafeStorage = {
                     localStorage.setItem(historyKey, JSON.stringify(trimmed));
                     console.log(`Trimmed history for profile ${pid}: ${entries.length} -> 25`);
                     freed = true;
+                    if (historyKey === currentKey) {
+                        trimmedHistory = trimmed;
+                        trimmedKey = historyKey;
+                    }
                 }
             }
 
@@ -303,10 +319,10 @@ const SafeStorage = {
                 console.log('Cleared DeArrow cache');
             }
 
-            return freed;
+            return { freed, trimmedHistory, trimmedKey };
         } catch (cleanupError) {
             console.log(`Cleanup error: ${cleanupError.message}`);
-            return false;
+            return { freed: false, trimmedHistory: null, trimmedKey: null };
         }
     },
     getItem: (key, fallback = null) => {

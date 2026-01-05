@@ -54,6 +54,7 @@ const App = {
     currentStreamUrl: null,
     currentVideoLoadId: 0,
     currentVideoAbortController: null,
+    preloadAbortController: null,
     upNext: [],
     autoplayEnabled: false,
     playbackSpeedIdx: 0,
