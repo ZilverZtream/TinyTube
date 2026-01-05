@@ -357,13 +357,10 @@ const Utils = {
     throttle: (func, wait) => PerformanceUtils.throttle(func, wait),
     debounce: (func, wait) => PerformanceUtils.debounce(func, wait),
     fetchWithTimeout: (url, options = {}, timeout = CONFIG.TIMEOUT) => {
-        // Add compression headers for API requests
-        if (!options.headers) {
-            options.headers = {};
-        }
-        if (!options.headers['Accept-Encoding']) {
-            options.headers['Accept-Encoding'] = 'gzip, deflate, br';
-        }
+        // FIX: Removed manual Accept-Encoding header to prevent CORS preflight
+        // Browsers automatically handle compression negotiation (gzip, deflate, br)
+        // Manually setting this header converts "Simple Request" to "Complex Request"
+        // which forces an OPTIONS preflight, adding 200-500ms latency per request
         return new Promise((resolve, reject) => {
             let timedOut = false;
             const timer = setTimeout(() => {
