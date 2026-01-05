@@ -201,6 +201,7 @@ const VirtualScroll = {
         // FIX: Calculate itemsPerRow dynamically instead of hardcoding to 4
         // This prevents "pop-in" glitches if CSS changes (responsive layouts, 4K screens)
         this.itemsPerRow = this.getItemsPerRow(container);
+        const firstCard = container.querySelector('.video-card, .channel-card');
 
         // Estimate card height (thumbnail + meta, roughly 250px)
         if (this.itemHeight === 0 && firstCard) {
@@ -213,16 +214,16 @@ const VirtualScroll = {
         const visibleRows = Math.ceil(this.containerHeight / rowHeight);
         const currentRow = Math.floor(scrollTop / rowHeight);
 
-        const bufferRows = Math.ceil(CONFIG.VIRTUAL_SCROLL_BUFFER / itemsPerRow);
+        const bufferRows = Math.ceil(CONFIG.VIRTUAL_SCROLL_BUFFER / this.itemsPerRow);
         const startRow = Math.max(0, currentRow - bufferRows);
         const endRow = Math.min(
-            Math.ceil(this.totalItems / itemsPerRow),
+            Math.ceil(this.totalItems / this.itemsPerRow),
             currentRow + visibleRows + bufferRows
         );
 
         return {
-            start: startRow * itemsPerRow,
-            end: Math.min(endRow * itemsPerRow, this.totalItems)
+            start: startRow * this.itemsPerRow,
+            end: Math.min(endRow * this.itemsPerRow, this.totalItems)
         };
     },
 
