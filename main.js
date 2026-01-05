@@ -42,7 +42,12 @@ const CONFIG = {
     INFO_KEY_LONG_PRESS_MS: 600,
     HUD_AUTO_HIDE_MS: 4000,
     MAX_PLAYER_ERROR_RETRIES: 3,
-    LOCALSTORAGE_QUOTA_EXCEEDED: "QuotaExceededError"
+    LOCALSTORAGE_QUOTA_EXCEEDED: "QuotaExceededError",
+    // Regex patterns (compiled once for performance)
+    REGEX_VIDEO_ID: /^[a-zA-Z0-9_-]{11}$/,
+    REGEX_URL_VIDEO_PARAM: /[?&]v=([^&]+)/,
+    REGEX_QUALITY_LABEL: /(\d{3,4})p/i,
+    REGEX_CIPHER_OP: /([a-z]+)(\d*)/
 };
 
 // --- O(1) LRU CACHE ---
@@ -95,6 +100,7 @@ const App = {
     currentVideoData: null,
     currentStreamUrl: null,
     currentVideoLoadId: 0,
+    currentVideoAbortController: null,
     upNext: [],
     autoplayEnabled: false,
     playbackSpeedIdx: 0,
@@ -117,7 +123,13 @@ const App = {
     playerControls: { active: false, index: 0 }
 };
 
-const el = (id) => document.getElementById(id);
+const el = (id) => {
+    // Check cache first for frequently accessed elements
+    if (App.cachedElements && App.cachedElements[id]) {
+        return App.cachedElements[id];
+    }
+    return document.getElementById(id);
+};
 
 // --- SAFE STORAGE WRAPPER ---
 const SafeStorage = {
@@ -176,6 +188,18 @@ const Utils = {
                 timedOut = true;
                 reject(new Error('Fetch timeout'));
             }, timeout);
+
+            // Handle abort signal cleanup
+            const signal = options.signal;
+            if (signal) {
+                signal.addEventListener('abort', () => {
+                    if (!timedOut) {
+                        clearTimeout(timer);
+                        reject(new DOMException('Aborted', 'AbortError'));
+                    }
+                });
+            }
+
             fetch(url, options).then(res => {
                 if (!timedOut) { clearTimeout(timer); resolve(res); }
             }).catch(err => {
@@ -209,9 +233,7 @@ const Utils = {
     },
     isValidUrl: (s) => { try { return s.startsWith("http"); } catch { return false; } },
     toast: (msg) => {
-        if (!App.cachedElements) App.cachedElements = {};
-        if (!App.cachedElements.toast) App.cachedElements.toast = el("toast");
-        const t = App.cachedElements.toast;
+        const t = el("toast");
         if (!t) return;
         t.textContent = msg;
         t.classList.remove("hidden");
@@ -242,9 +264,9 @@ const Utils = {
     },
     getVideoId: (item) => {
         if (!item) return null;
-        var raw = item.videoId || (item.url && (item.url.match(/[?&]v=([^&]+)/) || [])[1]);
+        var raw = item.videoId || (item.url && (item.url.match(CONFIG.REGEX_URL_VIDEO_PARAM) || [])[1]);
         if (!raw) return null;
-        return /^[a-zA-Z0-9_-]{11}$/.test(raw) ? raw : null;
+        return CONFIG.REGEX_VIDEO_ID.test(raw) ? raw : null;
     },
     findSegment: (time) => {
         let l = 0, r = App.sponsorSegs.length - 1;
@@ -268,7 +290,7 @@ const Utils = {
         if (!format) return 0;
         if (format.height) return format.height;
         if (format.qualityLabel) {
-            const match = format.qualityLabel.match(/(\d{3,4})p/i);
+            const match = format.qualityLabel.match(CONFIG.REGEX_QUALITY_LABEL);
             if (match) return parseInt(match[1], 10);
         }
         return 0;
@@ -326,7 +348,7 @@ const Cipher = {
         if (!sig || !seq) return sig;
         const chars = sig.split("");
         seq.split(",").forEach(inst => {
-            const op = inst.match(/([a-z]+)(\d*)/);
+            const op = inst.match(CONFIG.REGEX_CIPHER_OP);
             if (op) {
                 const func = Cipher.ops[op[1]];
                 const arg = parseInt(op[2], 10);
@@ -482,7 +504,7 @@ const Extractor = {
         }
         return "";
     },
-    extractInnertube: async (videoId) => {
+    extractInnertube: async (videoId, signal = null) => {
         try {
             const body = {
                 context: {
@@ -500,7 +522,7 @@ const Extractor = {
                 contentCheckOkay: true,
                 racyCheckOkay: true
             };
-            const res = await Utils.fetchWithTimeout("https://www.youtube.com/youtubei/v1/player", {
+            const fetchOptions = {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -512,7 +534,9 @@ const Extractor = {
                     "Accept-Language": "en-US,en;q=0.9"
                 },
                 body: JSON.stringify(body)
-            }, 12000);
+            };
+            if (signal) fetchOptions.signal = signal;
+            const res = await Utils.fetchWithTimeout("https://www.youtube.com/youtubei/v1/player", fetchOptions, 12000);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             if (!data.playabilityStatus || data.playabilityStatus.status !== "OK") {
@@ -698,6 +722,22 @@ const Feed = {
 
 // --- 6. UI ---
 const UI = {
+    cacheCommonElements: () => {
+        // Cache frequently accessed DOM elements for performance
+        App.cachedElements = {
+            'toast': el('toast'),
+            'sidebar': el('sidebar'),
+            'grid-container': el('grid-container'),
+            'search-input': el('search-input'),
+            'player-layer': el('player-layer'),
+            'player-hud': el('player-hud'),
+            'section-title': el('section-title'),
+            'video-info-overlay': el('video-info-overlay'),
+            'captions-overlay': el('captions-overlay'),
+            'enforcement-container': el('enforcement-container'),
+            'settings-overlay': el('settings-overlay')
+        };
+    },
     initLazyObserver: () => {
         if (!("IntersectionObserver" in window)) return;
         App.lazyObserver = new IntersectionObserver((entries) => {
@@ -996,6 +1036,14 @@ const Player = {
     
     start: async (item, retryCount = 0) => {
         if (!item) return;
+
+        // Abort any previous video load operations
+        if (App.currentVideoAbortController) {
+            App.currentVideoAbortController.abort();
+        }
+        App.currentVideoAbortController = new AbortController();
+        const signal = App.currentVideoAbortController.signal;
+
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
         App.playbackSpeedIdx = 0;
@@ -1016,7 +1064,7 @@ const Player = {
         if(!vId) { Utils.toast("Error: No ID"); return; }
         App.currentVideoId = vId;
         App.currentVideoLoadId++;
-        
+
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
         HUD.updateSpeedBadge(1);
@@ -1036,15 +1084,18 @@ const Player = {
         App.playerElements.bufferingSpinner.classList.remove("hidden");
         App.sponsorSegs = [];
         const loadId = App.currentVideoLoadId;
-        Utils.fetchWithTimeout(`${CONFIG.SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo"]`, {}, CONFIG.SPONSOR_FETCH_TIMEOUT)
+
+        // Fetch sponsor segments with abort signal
+        fetch(`${CONFIG.SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo"]`, { signal })
             .then(r=>r.json()).then(s => { if(Array.isArray(s) && loadId === App.currentVideoLoadId) App.sponsorSegs=s.sort((a,b)=>a.segment[0]-b.segment[0]); })
-            .catch(()=>{});
+            .catch((e)=>{ if (e.name !== 'AbortError') console.log('Sponsor fetch failed:', e.message); });
+
         const isCurrent = () => App.view === "PLAYER" && App.currentVideoId === vId && loadId === App.currentVideoLoadId;
         let streamUrl = null;
-        
+
         if (App.api) {
             try {
-                const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`);
+                const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`, { signal });
                 if (!isCurrent()) return;
                 if (res.ok) {
                     const data = await res.json();
@@ -1060,12 +1111,14 @@ const Player = {
                         Utils.toast("Src: API");
                     }
                 }
-            } catch(e) { console.log("API failed"); }
+            } catch(e) {
+                if (e.name !== 'AbortError') console.log("API failed:", e.message);
+            }
         }
-        
+
         if (!streamUrl) {
             try {
-                const direct = await Extractor.extractInnertube(vId);
+                const direct = await Extractor.extractInnertube(vId, signal);
                 if (!isCurrent()) return;
                 if (direct && direct.url) {
                     streamUrl = direct.url;
@@ -1073,7 +1126,9 @@ const Player = {
                     if (direct.meta.captions && direct.meta.captions.length) Player.setupCaptions({captions: direct.meta.captions});
                     Utils.toast("Src: Direct");
                 }
-            } catch(e) { console.log("Innertube failed"); }
+            } catch(e) {
+                if (e.name !== 'AbortError') console.log("Innertube failed:", e.message);
+            }
         }
 
         if (!App.upNext.length) {
@@ -1107,7 +1162,29 @@ const Player = {
         p.pause();
         Player.stopRenderLoop();
         try {
-            el("enforcement-container").innerHTML = `<iframe src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+            const container = el("enforcement-container");
+            container.innerHTML = `<iframe id="embed-iframe" src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+
+            // Add timeout to detect if embed fails to load
+            const embedTimeout = setTimeout(() => {
+                // Check if we're still in enforce mode and if iframe hasn't loaded properly
+                if (App.playerMode === "ENFORCE" && App.currentVideoId === vId) {
+                    const iframe = container.querySelector('#embed-iframe');
+                    if (iframe && !iframe.contentDocument) {
+                        Player.showError("Embed Failed", "Unable to load embedded player. Video may be restricted.");
+                    }
+                }
+            }, 10000); // 10 second timeout
+
+            // Listen for messages from iframe to confirm it loaded
+            const messageHandler = (event) => {
+                if (event.origin === "https://www.youtube.com" && embedTimeout) {
+                    clearTimeout(embedTimeout);
+                    window.removeEventListener('message', messageHandler);
+                }
+            };
+            window.addEventListener('message', messageHandler);
+
             Utils.toast("Src: Embed");
         } catch (e) {
             Player.showError("Playback Failed", "All methods failed.");
@@ -1726,6 +1803,7 @@ function setupRemote() {
 window.onload = async () => {
     const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     tick(); setInterval(tick, 60000);
+    UI.cacheCommonElements();
     UI.initLazyObserver();
     Comments.init();
     PlayerControls.init();
