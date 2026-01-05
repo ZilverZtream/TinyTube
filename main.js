@@ -119,7 +119,11 @@ const App = {
     playerElements: null,
     screenSaverState: null,
     // Watch history for resume
-    watchHistory: null
+    watchHistory: null,
+    playerControls: {
+        active: false,
+        index: 0
+    }
 };
 
 const el = (id) => document.getElementById(id);
@@ -601,6 +605,10 @@ const UI = {
             }
         } else if (App.focus.area === "search") el("search-input").classList.add("focused");
         else if (App.focus.area === "settings") el("save-btn").classList.add("focused-btn");
+
+        if (App.view === "PLAYER") {
+            PlayerControls.updateFocus();
+        }
     },
     fetchDeArrow: (item, idx) => {
         item.deArrowChecked = true;
@@ -733,12 +741,37 @@ const Player = {
             Utils.toast("No captions available");
         }
     },
+    cycleCaptionLanguage: () => {
+        if (!App.captionTracks.length) {
+            Utils.toast("No captions available");
+            return;
+        }
+
+        const tracks = App.captionTracks.filter(track => track && track.srclang);
+        if (!tracks.length) {
+            Utils.toast("No captions available");
+            return;
+        }
+
+        const currentLang = localStorage.getItem(Player.captionLangKey()) || "";
+        const activeTrack = tracks.find(track => track.track && track.track.mode === "showing");
+        const activeLang = activeTrack ? activeTrack.srclang : currentLang || tracks[0].srclang;
+        const currentIndex = tracks.findIndex(track => track.srclang === activeLang);
+        const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % tracks.length;
+        const nextLang = tracks[nextIndex].srclang;
+
+        localStorage.setItem(Player.captionLangKey(), nextLang);
+        Player.setCaptionMode(nextLang, "showing");
+        Utils.toast(`Captions: ${nextLang}`);
+    },
 
     start: async (item, retryCount = 0) => {
         if (!item) return;
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
         App.playbackSpeedIdx = 0;
+        App.playerControls.active = false;
+        App.playerControls.index = 0;
         App.currentVideoData = null;
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
@@ -903,12 +936,7 @@ const Player = {
 
     setupHUD: (p) => {
         const show = () => {
-            el("player-hud").classList.add("visible");
-            clearTimeout(App.hudTimer);
-            App.hudTimer = setTimeout(() => {
-                el("player-hud").classList.remove("visible");
-                el("video-info-overlay").classList.add("hidden");
-            }, 4000);
+            HUD.show();
         };
 
         p.onplay = () => {
@@ -1014,10 +1042,8 @@ const Player = {
                 el("info-description").textContent = data.description || "No description available.";
             }
             overlay.classList.remove("hidden");
-
-            // Keep HUD visible while info is shown
-            clearTimeout(App.hudTimer);
         }
+        HUD.refreshPinned();
     },
 
     stop: () => {
@@ -1048,6 +1074,8 @@ const Player = {
         App.currentVideoId = null;
         App.currentVideoData = null;
         App.seekKeyHeld = null;
+        App.playerControls.active = false;
+        App.playerControls.index = 0;
         Player.clearCaptions();
         ScreenSaver.restore();
     }
@@ -1204,6 +1232,88 @@ const Comments = {
     }
 };
 
+const PlayerControls = {
+    ids: [
+        "control-play",
+        "control-back",
+        "control-forward",
+        "control-captions",
+        "control-language",
+        "control-comments",
+        "control-subscribe"
+    ],
+    buttons: [],
+    actions: {
+        "control-play": () => {
+            const p = App.playerElements ? App.playerElements.player : el("native-player");
+            if (App.playerMode === "BYPASS") p.paused ? p.play() : p.pause();
+        },
+        "control-back": () => Player.seek("left"),
+        "control-forward": () => Player.seek("right"),
+        "control-captions": () => Player.toggleCaptions(),
+        "control-language": () => Player.cycleCaptionLanguage(),
+        "control-comments": () => {
+            PlayerControls.setActive(false);
+            Comments.toggle();
+        },
+        "control-subscribe": () => {
+            const item = App.items[App.focus.index];
+            if (item && item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
+        }
+    },
+    init: () => {
+        PlayerControls.buttons = PlayerControls.ids.map((id, idx) => {
+            const btn = el(id);
+            if (!btn) return null;
+            btn.addEventListener("click", () => {
+                App.playerControls.index = idx;
+                PlayerControls.setActive(true);
+                PlayerControls.runAction(id);
+            });
+            btn.addEventListener("keydown", (e) => {
+                if (e.keyCode === 13) {
+                    App.playerControls.index = idx;
+                    PlayerControls.setActive(true);
+                    PlayerControls.runAction(id);
+                }
+            });
+            return btn;
+        }).filter(Boolean);
+    },
+    setActive: (active) => {
+        App.playerControls.active = active;
+        if (active && App.playerControls.index >= PlayerControls.buttons.length) {
+            App.playerControls.index = 0;
+        }
+        HUD.refreshPinned();
+        UI.updateFocus();
+    },
+    move: (delta) => {
+        if (!App.playerControls.active || PlayerControls.buttons.length === 0) return;
+        const len = PlayerControls.buttons.length;
+        App.playerControls.index = (App.playerControls.index + delta + len) % len;
+        UI.updateFocus();
+    },
+    runAction: (id) => {
+        const action = PlayerControls.actions[id];
+        if (action) action();
+        HUD.refreshPinned();
+    },
+    activateFocused: () => {
+        const btn = PlayerControls.buttons[App.playerControls.index];
+        if (btn) PlayerControls.runAction(btn.id);
+    },
+    updateFocus: () => {
+        PlayerControls.buttons.forEach(btn => btn.classList.remove("focused"));
+        if (!App.playerControls.active) return;
+        const btn = PlayerControls.buttons[App.playerControls.index];
+        if (btn) {
+            btn.classList.add("focused");
+            if (typeof btn.focus === "function") btn.focus({ preventScroll: true });
+        }
+    }
+};
+
 // --- 7. INPUT ---
 function setupRemote() {
     document.addEventListener("visibilitychange", () => {
@@ -1252,6 +1362,29 @@ function setupRemote() {
                         break;
                 }
                 if (e.keyCode === 38 || e.keyCode === 40 || e.keyCode === 10009 || e.keyCode === 405) return;
+            }
+
+            if (App.playerControls.active) {
+                switch (e.keyCode) {
+                    case 37: // LEFT
+                        PlayerControls.move(-1);
+                        return;
+                    case 39: // RIGHT
+                        PlayerControls.move(1);
+                        return;
+                    case 38: // UP
+                        PlayerControls.setActive(false);
+                        return;
+                    case 13: // ENTER
+                    case 415: // PLAY or OK
+                        PlayerControls.activateFocused();
+                        return;
+                }
+            }
+
+            if (e.keyCode === 40) { // DOWN - focus player controls
+                PlayerControls.setActive(true);
+                return;
             }
 
             switch (e.keyCode) {
@@ -1481,6 +1614,7 @@ App.actions = {
 };
 
 const HUD = {
+    pinned: false,
     updateSubBadge: (isSubbed) => {
         const b = el("sub-badge");
         b.className = isSubbed ? "badge active" : "badge";
@@ -1493,6 +1627,28 @@ const HUD = {
         } else {
             b.textContent = speed + "x";
             b.classList.remove("hidden");
+        }
+    },
+    show: () => {
+        el("player-hud").classList.add("visible");
+        HUD.scheduleHide();
+    },
+    scheduleHide: () => {
+        clearTimeout(App.hudTimer);
+        App.hudTimer = setTimeout(() => {
+            if (HUD.pinned || App.playerControls.active || !el("video-info-overlay").classList.contains("hidden")) return;
+            el("player-hud").classList.remove("visible");
+            el("video-info-overlay").classList.add("hidden");
+        }, 4000);
+    },
+    refreshPinned: () => {
+        const overlayVisible = !el("video-info-overlay").classList.contains("hidden");
+        HUD.pinned = App.playerControls.active || overlayVisible;
+        if (HUD.pinned) {
+            el("player-hud").classList.add("visible");
+            clearTimeout(App.hudTimer);
+        } else {
+            HUD.scheduleHide();
         }
     }
 };
@@ -1536,6 +1692,7 @@ window.onload = async () => {
 
     UI.initLazyObserver();
     Comments.init();
+    PlayerControls.init();
 
     if (typeof tizen !== 'undefined') {
         const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'Return', 'Info'];
