@@ -105,15 +105,18 @@ const Chapters = {
 
         const lines = description.split('\n');
         const chapters = [];
-        const timestampRegex = /^(\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.+)$/;
+        const timestampRegex = /(\d{1,2}:)?(\d{1,2}):(\d{2})/;
 
         for (const line of lines) {
-            const match = line.trim().match(timestampRegex);
+            const trimmedLine = line.trim();
+            const match = trimmedLine.match(timestampRegex);
             if (match) {
                 const hours = match[1] ? parseInt(match[1].slice(0, -1)) : 0;
                 const minutes = parseInt(match[2]);
                 const seconds = parseInt(match[3]);
-                const title = match[4].trim();
+                let title = trimmedLine.replace(match[0], "").trim();
+                title = title.replace(/^[\[\]\(\)\-–—\s]+/, "").replace(/[\[\]\(\)\-–—\s]+$/, "");
+                if (!title) continue;
 
                 const timeInSeconds = hours * 3600 + minutes * 60 + seconds;
                 chapters.push({ time: timeInSeconds, title: title });
@@ -416,8 +419,15 @@ const Player = {
 
         const isCurrent = () => TinyTube.App.view === "PLAYER" && TinyTube.App.currentVideoId === vId && loadId === TinyTube.App.currentVideoLoadId;
         let streamUrl = null;
+        let apiPromise = null;
 
-        if (TinyTube.App.api) {
+        if (TinyTube.App.streamCache && TinyTube.App.streamCache.has(vId)) {
+            streamUrl = TinyTube.App.streamCache.get(vId);
+            console.log("Player: Cache Hit for " + vId);
+            TinyTube.Utils.toast("Src: Preload");
+        }
+
+        const hydrateFromApi = async () => {
             try {
                 const res = await TinyTube.Utils.fetchWithTimeout(`${TinyTube.App.api}/videos/${vId}`, { signal });
                 if (!isCurrent()) return;
@@ -445,9 +455,13 @@ const Player = {
                     const cappedFormats = TinyTube.Utils.applyResolutionCap(formats);
                     const preferred = TinyTube.Utils.pickPreferredStream(cappedFormats);
                     if (preferred && preferred.url) {
-                        streamUrl = preferred.url;
-                        TinyTube.App.currentQuality = preferred;
-                        TinyTube.Utils.toast("Src: API");
+                        if (!streamUrl) {
+                            streamUrl = preferred.url;
+                            TinyTube.Utils.toast("Src: API");
+                        }
+                        if (!TinyTube.App.currentQuality) {
+                            TinyTube.App.currentQuality = preferred;
+                        }
                     }
 
                     // Save video metadata to history for later display
@@ -462,6 +476,14 @@ const Player = {
                 }
             } catch(e) {
                 if (e.name !== 'AbortError') console.log("API failed:", e.message);
+            }
+        };
+
+        if (TinyTube.App.api) {
+            if (streamUrl) {
+                apiPromise = hydrateFromApi();
+            } else {
+                await hydrateFromApi();
             }
         }
 
@@ -480,7 +502,7 @@ const Player = {
             }
         }
 
-        if (!TinyTube.App.upNext.length) {
+        if (!TinyTube.App.upNext.length && !apiPromise) {
             await Player.loadUpNext(null, vId);
             if (!isCurrent()) return;
         }
