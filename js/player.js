@@ -529,6 +529,10 @@ const Player = {
     },
     
     enforce: (vId) => {
+        if (TinyTube.App.view !== "PLAYER") {
+            console.log("Player: Enforce blocked - Player closed");
+            return;
+        }
         // FIX: Add Network Check
         if (!navigator.onLine) {
              Player.showError("Network Error", "Check your internet connection.");
@@ -550,7 +554,7 @@ const Player = {
             // Add timeout to detect if embed fails to load
             TinyTube.App.embedTimeout = setTimeout(() => {
                 // Check if we're still in enforce mode and if iframe hasn't loaded properly
-                if (TinyTube.App.playerMode === "ENFORCE" && TinyTube.App.currentVideoId === vId) {
+                if (TinyTube.App.view === "PLAYER" && TinyTube.App.playerMode === "ENFORCE" && TinyTube.App.currentVideoId === vId) {
                     const iframe = container.querySelector('#embed-iframe');
                     if (iframe && !iframe.contentDocument) {
                         Player.showError("Embed Failed", "Unable to load embedded player. Video may be restricted.");
