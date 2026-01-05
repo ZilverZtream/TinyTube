@@ -146,6 +146,7 @@ const VirtualScroll = {
     totalItems: 0,
     itemHeight: 0,
     containerHeight: 0,
+    itemsPerRow: 1,
     scrollHandler: null,
     scrollRAFPending: false,
 
@@ -191,6 +192,7 @@ const VirtualScroll = {
                 if (itemsPerRow < 1) itemsPerRow = 1;
             }
         }
+        this.itemsPerRow = itemsPerRow;
 
         // Estimate card height (thumbnail + meta, roughly 250px)
         if (this.itemHeight === 0 && firstCard) {
@@ -216,8 +218,27 @@ const VirtualScroll = {
         };
     },
 
+    ensureSpacers: function(container) {
+        if (!container) return { topSpacer: null, bottomSpacer: null };
+        let topSpacer = container.querySelector('.vs-top-spacer');
+        if (!topSpacer) {
+            topSpacer = document.createElement('div');
+            topSpacer.className = 'vs-top-spacer';
+            container.insertBefore(topSpacer, container.firstChild);
+        }
+        let bottomSpacer = container.querySelector('.vs-bottom-spacer');
+        if (!bottomSpacer) {
+            bottomSpacer = document.createElement('div');
+            bottomSpacer.className = 'vs-bottom-spacer';
+            container.appendChild(bottomSpacer);
+        }
+        return { topSpacer, bottomSpacer };
+    },
+
     updateVisible: function() {
         if (!this.enabled) return;
+        const container = document.getElementById('grid-container');
+        if (!container) return;
         const { start, end } = this.calculateVisible();
 
         // Only update if range changed significantly
@@ -227,6 +248,16 @@ const VirtualScroll = {
 
         this.visibleStart = start;
         this.visibleEnd = end;
+
+        const { topSpacer, bottomSpacer } = this.ensureSpacers(container);
+        const totalRows = Math.ceil(this.totalItems / this.itemsPerRow);
+        const startRow = Math.floor(start / this.itemsPerRow);
+        const endRow = Math.ceil(end / this.itemsPerRow);
+        const topHeight = startRow * this.itemHeight;
+        const bottomHeight = Math.max(0, totalRows - endRow) * this.itemHeight;
+
+        if (topSpacer) topSpacer.style.height = `${topHeight}px`;
+        if (bottomSpacer) bottomSpacer.style.height = `${bottomHeight}px`;
 
         // Re-render visible range
         UI.renderVisibleRange(start, end);
@@ -355,10 +386,15 @@ const UI = {
         if (CONFIG.VIRTUAL_SCROLL_ENABLED && TinyTube.App.items.length > 20) {
             VirtualScroll.enabled = true;
             VirtualScroll.init();
-            const { start, end } = VirtualScroll.calculateVisible();
-            UI.renderVisibleRange(start, Math.min(end, 20)); // Initial render
+            VirtualScroll.visibleStart = -1;
+            VirtualScroll.visibleEnd = -1;
+            VirtualScroll.updateVisible();
         } else {
             VirtualScroll.enabled = false;
+            const topSpacer = grid.querySelector('.vs-top-spacer');
+            const bottomSpacer = grid.querySelector('.vs-bottom-spacer');
+            if (topSpacer) topSpacer.remove();
+            if (bottomSpacer) bottomSpacer.remove();
             UI.renderVisibleRange(0, TinyTube.App.items.length); // Render all
         }
 
@@ -383,6 +419,12 @@ const UI = {
         requestAnimationFrame(() => {
             const frag = document.createDocumentFragment();
             const useLazy = TinyTube.App.lazyObserver !== null;
+            let bottomSpacer = null;
+
+            if (VirtualScroll.enabled) {
+                const spacers = VirtualScroll.ensureSpacers(grid);
+                bottomSpacer = spacers.bottomSpacer;
+            }
 
             // Get existing cards to check what needs updating
             const existingCards = new Set();
@@ -582,7 +624,11 @@ const UI = {
                 CardPool.releaseAll(grid);
                 grid.textContent = "";
             }
-            grid.appendChild(frag);
+            if (VirtualScroll.enabled && bottomSpacer) {
+                grid.insertBefore(frag, bottomSpacer);
+            } else {
+                grid.appendChild(frag);
+            }
         });
     },
     updateFocus: () => {
