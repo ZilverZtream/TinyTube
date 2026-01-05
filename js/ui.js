@@ -19,38 +19,40 @@ const CardPool = {
     release: function(element, skipFocus = false) {
         if (!element) return;
 
-        // Only handle focus if not skipped (will be handled by releaseAll)
-        if (!skipFocus) {
-            const activeElement = document.activeElement;
-            if (activeElement && (activeElement === element || element.contains(activeElement))) {
-                const grid = el("grid-container");
-                let fallback = null;
-                if (grid) {
-                    fallback = element.nextElementSibling || element.previousElementSibling;
-                    if (!fallback || !fallback.matches('.video-card, .channel-card')) {
-                        fallback = grid.querySelector('.video-card, .channel-card');
-                    }
-                }
+        const activeElement = document.activeElement;
+        const isActive = activeElement && (activeElement === element || element.contains(activeElement));
 
-                if (fallback) {
-                    const idParts = fallback.id ? fallback.id.split('-') : [];
-                    const idx = parseInt(idParts[1], 10);
-                    TinyTube.App.focus.area = "grid";
-                    TinyTube.App.focus.index = Number.isNaN(idx) ? 0 : idx;
-                    if (typeof fallback.focus === "function") {
-                        fallback.focus();
+        // Rescue focus for active cards even when skipFocus is true.
+        if (isActive) {
+            const grid = el("grid-container");
+            let fallback = null;
+            if (grid) {
+                if (!skipFocus) {
+                    fallback = element.nextElementSibling || element.previousElementSibling;
+                }
+                if (!fallback || !fallback.matches('.video-card, .channel-card')) {
+                    fallback = grid.querySelector('.video-card, .channel-card');
+                }
+            }
+
+            if (fallback) {
+                const idParts = fallback.id ? fallback.id.split('-') : [];
+                const idx = parseInt(idParts[1], 10);
+                TinyTube.App.focus.area = "grid";
+                TinyTube.App.focus.index = Number.isNaN(idx) ? 0 : idx;
+                if (typeof fallback.focus === "function") {
+                    fallback.focus();
+                }
+                UI.updateFocus();
+            } else {
+                const menuHome = el("menu-home");
+                if (menuHome) {
+                    TinyTube.App.focus.area = "menu";
+                    TinyTube.App.menuIdx = 0;
+                    if (typeof menuHome.focus === "function") {
+                        menuHome.focus();
                     }
                     UI.updateFocus();
-                } else {
-                    const menuHome = el("menu-home");
-                    if (menuHome) {
-                        TinyTube.App.focus.area = "menu";
-                        TinyTube.App.menuIdx = 0;
-                        if (typeof menuHome.focus === "function") {
-                            menuHome.focus();
-                        }
-                        UI.updateFocus();
-                    }
                 }
             }
         }
