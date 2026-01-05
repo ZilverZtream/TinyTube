@@ -1,16 +1,18 @@
 /**
- * TinyTube Pro v11.1 ("The Fixer")
+ * TinyTube Pro v11.3 ("The Breaker")
  *
- * v11.1 Fixes:
+ * v11.3 Updates:
+ * - ADDED: Auto-Cipher Breaker (Downloads & parses player.js on startup)
+ * - ADDED: Cipher Engine (Robust command-based deciphering)
+ * - FIX: UI Memory Leak (Named event handlers in renderGrid)
+ * - FIX: Network Dead-End Protection in Player.enforce
+ *
+ * v11.1 Fixes (Preserved):
  * - RESTORED: App.actions (Menu/Search/Settings logic)
  * - RESTORED: HUD object (Player UI state management)
  * - RESTORED: ScreenSaver object (Tizen hardware control)
  * - FIX: Safe access for data.formatStreams in API fallback
- *
- * v11.0 Strategy (Preserved):
- * - Perditum Primary -> Innertube Stealth -> Embed
  */
-
 const CONFIG = {
     PRIMARY_API: "https://inv.perditum.com/api/v1",
     SPONSOR_API: "https://sponsor.ajay.app/api/skipSegments",
@@ -23,7 +25,10 @@ const CONFIG = {
     CLIENT_NAME: "ANDROID",
     CLIENT_VERSION: "20.51.39",
     SDK_VERSION: 35,
-    USER_AGENT: "com.google.android.youtube/20.51.39 (Linux; U; Android 15; US) gzip"
+    USER_AGENT: "com.google.android.youtube/20.51.39 (Linux; U; Android 15; US) gzip",
+    // Default Cipher (Fallback if Breaker fails)
+    CIPHER_SEQUENCE: "r,s3", 
+    DEFAULT_CIPHER: "r,s3"
 };
 
 // --- O(1) LRU CACHE ---
@@ -175,7 +180,7 @@ const Utils = {
         if (!item) return null;
         var raw = item.videoId || (item.url && (item.url.match(/[?&]v=([^&]+)/) || [])[1]);
         if (!raw) return null;
-        return /^[a-zA-Z0-9_-]{11}$/.test(raw) ? raw : null;
+        return /^[a-zA-Z0-9*-]{11}$/.test(raw) ? raw : null;
     },
     findSegment: (time) => {
         let l = 0, r = App.sponsorSegs.length - 1;
@@ -226,7 +231,124 @@ const Utils = {
     }
 };
 
-// --- 2. EXTRACTOR (INNERTUBE STEALTH) ---
+// --- NEW: CIPHER ENGINE (Command Based) ---
+const Cipher = {
+    ops: {
+        r: (a) => a.reverse(),
+        s: (a, i) => { 
+            const t = a[0]; 
+            a[0] = a[i % a.length]; 
+            a[i % a.length] = t; 
+        },
+        sl: (a, i) => a.splice(0, i)
+    },
+    decipher: (sig, seq) => {
+        if (!sig || !seq) return sig;
+        const chars = sig.split("");
+        seq.split(",").forEach(inst => {
+            const op = inst.match(/([a-z]+)(\d*)/);
+            if (op) {
+                const func = Cipher.ops[op[1]];
+                const arg = parseInt(op[2], 10);
+                if (func) func(chars, isNaN(arg) ? 0 : arg);
+            }
+        });
+        return chars.join("");
+    }
+};
+
+// --- NEW: AUTO-CIPHER BREAKER (Downloads & Parses player.js) ---
+const CipherBreaker = {
+    cache: null,
+    run: async () => {
+        if (CipherBreaker.cache) return CipherBreaker.cache;
+        try {
+            console.log("CipherBreaker: Fetching...");
+            
+            // 1. Get player.js URL via a known video page
+            const vidRes = await Utils.fetchWithTimeout("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            const vidText = await vidRes.text();
+            
+            const playerUrlMatch = vidText.match(/\/s\/player\/[a-zA-Z0-9]+\/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_]+\/base\.js/);
+            if (!playerUrlMatch) throw new Error("No player.js url");
+            
+            // 2. Fetch player.js
+            const playerRes = await Utils.fetchWithTimeout("https://www.youtube.com" + playerUrlMatch[0]);
+            const raw = await playerRes.text();
+            
+            // 3. Find decipher body
+            // We look for the pattern: split("") ... join("")
+            const funcMatch = raw.match(/([a-zA-Z0-9$]+)=function\(\w+\)\{a=a\.split\(""\);([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a,\d+\)/);
+            
+            if (!funcMatch) {
+                // Fallback Manual Parse if regex misses
+                const alt = raw.match(/function\(\w+\)\{a=a\.split\(""\);(.*?);return a\.join\(""\)\}/);
+                if (!alt) throw new Error("No decipher body");
+                return CipherBreaker.parseManual(alt[1]);
+            }
+            
+            const helperName = funcMatch[2]; 
+            const funcBody = funcMatch[0];
+
+            // 4. Find helper object definition
+            const helperRegex = new RegExp(`var ${helperName}=\\{([\\s\\S]*?)\\};`);
+            const helperMatch = raw.match(helperRegex);
+            if (!helperMatch) throw new Error("No helper object");
+            const helperContent = helperMatch[1];
+
+            // 5. Map obfuscated names to atomic ops
+            const opsMap = {};
+            const swapM = helperContent.match(/(\w+):function\(\w+,\w+\)\{.*?a\[0\]=a\[\w+%\w+\.length\].*?\}/);
+            if (swapM) opsMap[swapM[1]] = "s";
+            
+            const spliceM = helperContent.match(/(\w+):function\(\w+,\w+\)\{.*?\.splice\(/);
+            if (spliceM) opsMap[spliceM[1]] = "sl";
+            
+            const reverseM = helperContent.match(/(\w+):function\(\w+\)\{.*?\.reverse\(/);
+            if (reverseM) opsMap[reverseM[1]] = "r";
+
+            // 6. Build sequence
+            const cmds = [];
+            const stmts = funcBody.split(";");
+            for (const s of stmts) {
+                if (s.includes(helperName)) {
+                    const method = s.match(/\.([a-zA-Z0-9$]+)\(/);
+                    const arg = s.match(/\(a,(\d+)\)/);
+                    if (method && opsMap[method[1]]) {
+                        cmds.push(opsMap[method[1]] + (arg ? arg[1] : ""));
+                    }
+                }
+            }
+            
+            const seq = cmds.join(",");
+            console.log("CipherBreaker: " + seq);
+            CipherBreaker.cache = seq;
+            return seq;
+        } catch (e) {
+            console.log("CipherBreaker fail: " + e.message);
+            return CONFIG.DEFAULT_CIPHER;
+        }
+    },
+    // Fallback parser that just looks for keywords
+    parseManual: (body) => {
+        const cmds = [];
+        const lines = body.split(";");
+        for (const l of lines) {
+            if (l.includes("reverse")) cmds.push("r");
+            else if (l.includes("splice")) {
+                const arg = l.match(/(\d+)/);
+                cmds.push("sl" + (arg ? arg[1] : "0"));
+            }
+            else if (l.indexOf("[0]") > -1) {
+                const arg = l.match(/(\d+)/);
+                cmds.push("s" + (arg ? arg[1] : "0"));
+            }
+        }
+        return cmds.join(",");
+    }
+};
+
+// --- 2. EXTRACTOR (Modified to use Cipher Engine) ---
 const Extractor = {
     parseCipher: (cipher) => {
         if (!cipher) return null;
@@ -237,24 +359,6 @@ const Extractor = {
         const sig = params.get("sig") || params.get("signature");
         return { url, s, sp, sig };
     },
-    decipherSignature: (sig) => {
-        if (!sig) return "";
-        try {
-            const chars = sig.split("");
-            if (chars.length < 5) return sig;
-            const swap = (arr, idx) => {
-                const pos = idx % arr.length;
-                const tmp = arr[0];
-                arr[0] = arr[pos];
-                arr[pos] = tmp;
-            };
-            swap(chars, 3);
-            chars.reverse();
-            return chars.join("");
-        } catch {
-            return sig;
-        }
-    },
     resolveFormatUrl: (format) => {
         if (!format) return "";
         if (format.url) return format.url;
@@ -263,7 +367,8 @@ const Extractor = {
             if (!parsed || !parsed.url) return "";
             if (parsed.sig) return `${parsed.url}&${parsed.sp}=${parsed.sig}`;
             if (parsed.s) {
-                const deciphered = Extractor.decipherSignature(parsed.s);
+                // UPDATE: Use the Cipher Engine
+                const deciphered = Cipher.decipher(parsed.s, CONFIG.CIPHER_SEQUENCE);
                 return `${parsed.url}&${parsed.sp}=${deciphered}`;
             }
         }
@@ -287,7 +392,6 @@ const Extractor = {
                 contentCheckOkay: true,
                 racyCheckOkay: true
             };
-
             const res = await Utils.fetchWithTimeout("https://www.youtube.com/youtubei/v1/player", {
                 method: "POST",
                 headers: {
@@ -301,28 +405,21 @@ const Extractor = {
                 },
                 body: JSON.stringify(body)
             }, 12000);
-
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-
             if (!data.playabilityStatus || data.playabilityStatus.status !== "OK") {
                 throw new Error((data.playabilityStatus && data.playabilityStatus.reason) || "Unplayable");
             }
-
             const streamingData = data.streamingData;
             if (!streamingData) throw new Error("No streams");
-
             const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
-
             const resolvedFormats = formats.map((format) => {
                 const url = Extractor.resolveFormatUrl(format);
                 return url ? Object.assign({}, format, { resolvedUrl: url }) : null;
             }).filter(Boolean);
-
             let best = Utils.pickPreferredStream(resolvedFormats.filter(f => f.resolvedUrl && f.audioQuality));
             if (!best) best = Utils.pickPreferredStream(resolvedFormats);
             if (!best || !best.resolvedUrl) throw new Error("No direct URL");
-
             var captionTracks = data.captions && data.captions.playerCaptionsTracklistRenderer && data.captions.playerCaptionsTracklistRenderer.captionTracks;
             var captions = captionTracks ? captionTracks.map(function(c) {
                 return {
@@ -332,7 +429,6 @@ const Extractor = {
                     vttUrl: c.baseUrl + "&fmt=vtt"
                 };
             }) : [];
-
             var publishDate = data.microformat && data.microformat.playerMicroformatRenderer && data.microformat.playerMicroformatRenderer.publishDate;
             return {
                 url: best.resolvedUrl + "&alr=yes",
@@ -447,7 +543,6 @@ const Feed = {
         }
         el("section-title").textContent = `My Feed (${subs.length})`;
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Building Feed...</p></div>';
-
         try {
             const results = await Utils.processQueue(subs, 3, async (sub) => {
                 try {
@@ -507,7 +602,9 @@ const UI = {
             });
         }, { rootMargin: "200px" });
     },
-    handleImgError: (img) => {
+    // FIX: Named function to prevent closure memory leaks
+    handleImgError: (e) => {
+        const img = e.target;
         img.onerror = null;
         img.src = "icon.png";
     },
@@ -517,33 +614,28 @@ const UI = {
         const grid = el("grid-container");
         if (App.lazyObserver) App.lazyObserver.disconnect();
         grid.textContent = "";
-
         for (const key in App.pendingDeArrow) {
             clearTimeout(App.pendingDeArrow[key]);
             delete App.pendingDeArrow[key];
         }
-
         if (App.items.length === 0) {
             grid.innerHTML = '<div class="empty-state"><h3>No Results</h3></div>';
             return false;
         }
-
         const frag = document.createDocumentFragment();
         const useLazy = App.lazyObserver !== null;
         let idx = 0;
-
         for (const item of App.items) {
             const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
             div.id = `card-${idx}`;
-
             let thumbUrl = "icon.png";
             if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
             else if (item.thumbnail) thumbUrl = item.thumbnail;
             else if (item.authorThumbnails && item.authorThumbnails[0]) thumbUrl = item.authorThumbnails[0].url;
-
             if (item.type === "channel") {
                 const img = Utils.create("img", "c-avatar");
-                img.onerror = function() { UI.handleImgError(this); };
+                // FIX: Use named reference
+                img.onerror = UI.handleImgError;
                 if (useLazy && idx > 7) {
                     img.dataset.src = thumbUrl;
                     img.src = "icon.png";
@@ -555,31 +647,27 @@ const UI = {
             } else {
                 const tc = Utils.create("div", "thumb-container");
                 const img = Utils.create("img", "thumb");
-                img.onerror = function() { UI.handleImgError(this); };
+                // FIX: Use named reference
+                img.onerror = UI.handleImgError;
                 if (useLazy && idx > 7) {
                     img.dataset.src = thumbUrl;
                     img.src = "icon.png";
                     App.lazyObserver.observe(img);
                 } else { img.src = thumbUrl; }
                 tc.appendChild(img);
-
                 if (item.lengthSeconds) tc.appendChild(Utils.create("span", "duration-badge", Utils.formatTime(item.lengthSeconds)));
                 if (item.liveNow) tc.appendChild(Utils.create("span", "live-badge", "LIVE"));
-
                 const vId = Utils.getVideoId(item);
                 const savedPos = vId ? DB.getPosition(vId) : 0;
                 if (savedPos > 0) tc.appendChild(Utils.create("span", "resume-badge", Utils.formatTime(savedPos)));
-
                 div.appendChild(tc);
                 const meta = Utils.create("div", "meta");
                 const h3 = Utils.create("h3", null, item.title);
                 h3.id = `title-${idx}`;
                 meta.appendChild(h3);
-
                 let info = item.author || "";
                 if (item.viewCount) info += (info ? " • " : "") + Utils.formatViews(item.viewCount);
                 if (item.published) info += (info ? " • " : "") + Utils.formatDate(item.published);
-
                 meta.appendChild(Utils.create("p", null, info));
                 div.appendChild(meta);
             }
@@ -587,7 +675,6 @@ const UI = {
             idx++;
         }
         grid.appendChild(frag);
-
         if (App.focus.area !== "search" && App.focus.area !== "settings") {
             App.focus = { area: "grid", index: 0 };
             UI.updateFocus();
@@ -634,7 +721,6 @@ const UI = {
                 App.lastFocused = saveBtn;
             }
         }
-
         if (App.view === "PLAYER" && App.activeLayer === "CONTROLS") {
             PlayerControls.updateFocus();
         }
@@ -774,7 +860,6 @@ const Player = {
         el("player-hud").classList.add("visible");
         ScreenSaver.disable();
         if (!App.playerElements) Player.cacheElements();
-
         const vId = Utils.getVideoId(item);
         if(!vId) { Utils.toast("Error: No ID"); return; }
         App.currentVideoId = vId;
@@ -784,9 +869,9 @@ const Player = {
         HUD.updateSpeedBadge(1);
         el("video-info-overlay").classList.add("hidden");
         el("captions-overlay").classList.add("hidden");
+        el("enforcement-container").innerHTML = ""; // Clear
         Comments.reset();
         Player.clearCaptions();
-
         const p = App.playerElements.player;
         p.pause();
         p.src = "";
@@ -794,17 +879,14 @@ const Player = {
         if (item.videoThumbnails && item.videoThumbnails[0]) posterUrl = item.videoThumbnails[0].url;
         else if (item.thumbnail) posterUrl = item.thumbnail;
         if(posterUrl) p.poster = posterUrl;
-
         App.playerElements.bufferingSpinner.classList.remove("hidden");
-
         App.sponsorSegs = [];
         Utils.fetchWithTimeout(`${CONFIG.SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo"]`, {}, 5000)
             .then(r=>r.json()).then(s => { if(Array.isArray(s)) App.sponsorSegs=s.sort((a,b)=>a.segment[0]-b.segment[0]); })
             .catch(()=>{});
-
         const isCurrent = () => App.view === "PLAYER" && App.currentVideoId === vId;
         let streamUrl = null;
-
+        
         if (App.api) {
             try {
                 const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`);
@@ -814,7 +896,6 @@ const Player = {
                     if (!isCurrent()) return;
                     App.currentVideoData = data;
                     Player.setupCaptions(data);
-
                     const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
                     const preferred = Utils.pickPreferredStream(formats);
                     if (preferred && preferred.url) {
@@ -824,7 +905,7 @@ const Player = {
                 }
             } catch(e) { console.log("API failed"); }
         }
-
+        
         if (!streamUrl) {
             try {
                 const direct = await Extractor.extractInnertube(vId);
@@ -833,18 +914,18 @@ const Player = {
                     streamUrl = direct.url;
                     App.currentVideoData = direct.meta;
                     if (direct.meta.captions && direct.meta.captions.length) Player.setupCaptions({captions: direct.meta.captions});
-                    Utils.toast("Src: Direct (Exp)");
+                    Utils.toast("Src: Direct");
                 }
             } catch(e) { console.log("Innertube failed"); }
         }
-
+        
         if (streamUrl) {
             App.currentStreamUrl = streamUrl;
             p.src = streamUrl;
             p.style.display = "block";
             const savedPos = DB.getPosition(vId);
             if (savedPos > 0) { p.currentTime = savedPos; Utils.toast(`Resume: ${Utils.formatTime(savedPos)}`); }
-            p.play();
+            p.play().catch(e => { console.log("Play failed", e); Player.enforce(vId); });
             Player.setupHUD(p);
             if (App.rafId) cancelAnimationFrame(App.rafId);
             App.rafId = requestAnimationFrame(Player.renderLoop);
@@ -855,18 +936,27 @@ const Player = {
     },
     
     enforce: (vId) => {
+        // FIX: Add Network Check
+        if (!navigator.onLine) {
+             Player.showError("Network Error", "Check your internet connection.");
+             return;
+        }
         App.playerMode = "ENFORCE";
         const p = App.playerElements.player;
         p.style.display = "none";
         p.pause();
         if (App.rafId) cancelAnimationFrame(App.rafId);
         App.rafId = null;
-        el("enforcement-container").innerHTML = `
-            <iframe src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" 
-                    width="100%" height="100%" frameborder="0" 
-                    allow="autoplay; encrypted-media" allowfullscreen>
-            </iframe>`;
-        Utils.toast("Src: Embed");
+        try {
+            el("enforcement-container").innerHTML = `<iframe src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+            Utils.toast("Src: Embed");
+        } catch (e) {
+            Player.showError("Playback Failed", "All methods failed.");
+        }
+    },
+    showError: (title, msg) => {
+        el("enforcement-container").innerHTML = `<div class="player-error"><h3>${title}</h3><p>${msg}</p></div>`;
+        App.playerElements.bufferingSpinner.classList.add("hidden");
     },
     setupHUD: (p) => {
         const show = () => HUD.show();
@@ -879,6 +969,7 @@ const Player = {
         p.onseeked = show;
         p.onwaiting = () => App.playerElements.bufferingSpinner.classList.remove("hidden");
         p.onplaying = () => App.playerElements.bufferingSpinner.classList.add("hidden");
+        p.onerror = () => Player.enforce(App.currentVideoId);
     },
     renderLoop: () => {
         if (App.view !== "PLAYER") {
@@ -1232,17 +1323,14 @@ function setupRemote() {
     document.addEventListener("visibilitychange", () => {
         if (document.hidden && App.view === "PLAYER") el("native-player").pause();
     });
-
     document.addEventListener('keyup', (e) => {
         if ([37,39,412,417].includes(e.keyCode)) { App.seekKeyHeld = null; App.seekKeyTime = 0; }
         if (e.keyCode === 457 && App.view === "PLAYER") {
             if (App.infoKeyTimer) { clearTimeout(App.infoKeyTimer); App.infoKeyTimer = null; if (!App.infoKeyHandled) Player.toggleInfo(); }
         }
     });
-
     document.addEventListener('keydown', (e) => {
         if (e.keyCode !== 10009) App.exitCounter = 0;
-
         if (App.view === "PLAYER") {
             if (App.activeLayer === "COMMENTS") {
                 if (e.keyCode === 38) Comments.scroll(-1);
@@ -1270,7 +1358,6 @@ function setupRemote() {
                 else if (e.keyCode === 13 || e.keyCode === 415) PlayerControls.activateFocused();
                 return;
             }
-
             if (e.keyCode === 40) { PlayerControls.setActive(true); return; }
             const p = el("native-player");
             switch (e.keyCode) {
@@ -1313,7 +1400,6 @@ function setupRemote() {
             }
             return;
         }
-
         if (App.view === "SETTINGS") {
             if (e.keyCode === 10009) { el("settings-overlay").classList.add("hidden"); App.view = "BROWSE"; }
             else if (e.keyCode === 13) App.actions.saveSettings();
@@ -1326,14 +1412,12 @@ function setupRemote() {
             }
             return;
         }
-
         if (App.focus.area === "search") {
             if (e.keyCode === 13) App.actions.runSearch();
             else if (e.keyCode === 40) { el("search-input").blur(); App.focus.area = "grid"; UI.updateFocus(); }
             else if (e.keyCode === 10009) { el("search-input").classList.add("hidden"); App.focus.area = "menu"; UI.updateFocus(); }
             return;
         }
-
         switch (e.keyCode) {
             case 38: 
                 if (App.focus.area === "grid" && App.focus.index >= 4) App.focus.index -= 4;
@@ -1398,8 +1482,18 @@ window.onload = async () => {
         try { App.screenSaverState = webapis.appcommon.getScreenSaver(); } catch(e){}
         ScreenSaver.disable();
     }
+    
     el("backend-status").textContent = "Init...";
     setupRemote();
     DB.loadProfile();
+
+    // --- STARTUP SEQUENCE ---
+    // 1. Try to break cipher
+    el("backend-status").textContent = "Breaking Cipher...";
+    const freshCipher = await CipherBreaker.run();
+    CONFIG.CIPHER_SEQUENCE = freshCipher;
+    
+    // 2. Connect
+    el("backend-status").textContent = "Connecting...";
     await Network.connect();
 };
