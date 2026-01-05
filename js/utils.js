@@ -344,6 +344,12 @@ const SafeStorage = {
     }
 };
 
+const sanitizeVideoId = function(value) {
+    if (typeof value !== 'string') return null;
+    var trimmed = value.trim();
+    return /^[a-zA-Z0-9_-]{11}$/.test(trimmed) ? trimmed : null;
+};
+
 const Utils = {
     create: (tag, cls, text) => {
         const e = document.createElement(tag);
@@ -446,11 +452,12 @@ const Utils = {
         if (diff < 31536000) return Math.floor(diff / 2592000) + " months ago";
         return Math.floor(diff / 31536000) + " years ago";
     },
+    sanitizeVideoId: sanitizeVideoId,
     getVideoId: (item) => {
         if (!item) return null;
         var raw = item.videoId || (item.url && (item.url.match(CONFIG.REGEX_URL_VIDEO_PARAM) || [])[1]);
         if (!raw) return null;
-        return CONFIG.REGEX_VIDEO_ID.test(raw) ? raw : null;
+        return sanitizeVideoId(raw);
     },
     findSegment: (time) => {
         const segs = (TinyTube.App && TinyTube.App.sponsorSegs) || [];

@@ -557,6 +557,11 @@ const Player = {
              Player.showError("Network Error", "Check your internet connection.");
              return;
         }
+        const sanitizedId = TinyTube.Utils.sanitizeVideoId(vId);
+        if (!sanitizedId) {
+            Player.showError("Invalid Video", "Invalid video ID.");
+            return;
+        }
         TinyTube.App.playerMode = "ENFORCE";
         const p = TinyTube.App.playerElements.player;
         p.style.display = "none";
@@ -568,7 +573,16 @@ const Player = {
 
         try {
             const container = el("enforcement-container");
-            container.innerHTML = `<iframe id="embed-iframe" src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+            container.textContent = "";
+            const iframe = document.createElement("iframe");
+            iframe.id = "embed-iframe";
+            iframe.src = `https://www.youtube.com/embed/${sanitizedId}?autoplay=1&playsinline=1`;
+            iframe.setAttribute("width", "100%");
+            iframe.setAttribute("height", "100%");
+            iframe.setAttribute("frameborder", "0");
+            iframe.setAttribute("allow", "autoplay; encrypted-media");
+            iframe.setAttribute("allowfullscreen", "");
+            container.appendChild(iframe);
 
             // Add timeout to detect if embed fails to load
             TinyTube.App.embedTimeout = setTimeout(() => {
