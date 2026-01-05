@@ -79,6 +79,7 @@ const CardPool = {
             img.onerror = null;      // Clear old error handlers
             img.src = 'default.png';    // Reset to placeholder
             img.removeAttribute('data-src'); // Clear lazy-load marker
+            img.removeAttribute('data-fallback');
         }
 
         const isChannel = element.classList.contains('channel-card');
