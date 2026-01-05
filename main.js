@@ -480,7 +480,8 @@ const UI = {
         img.src = "icon.png";
     },
     renderGrid: (data) => {
-        App.items = data || [];
+        const items = (data || []).filter(item => item && ["video", "channel", "shortVideo"].includes(item.type));
+        App.items = items;
         const grid = el("grid-container");
         if (App.lazyObserver) App.lazyObserver.disconnect();
         grid.textContent = "";
@@ -500,8 +501,6 @@ const UI = {
         let idx = 0;
 
         for (const item of App.items) {
-            if (item.type && item.type !== "video" && item.type !== "channel" && item.type !== "shortVideo") continue;
-
             const div = Utils.create("div", item.type === "channel" ? "channel-card" : "video-card");
             div.id = `card-${idx}`;
 
