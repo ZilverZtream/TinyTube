@@ -1325,7 +1325,7 @@ function setupRemote() {
 
     // Handle key release for seek acceleration
     document.addEventListener('keyup', (e) => {
-        if (e.keyCode === 37 || e.keyCode === 39) {
+        if (e.keyCode === 37 || e.keyCode === 39 || e.keyCode === 412 || e.keyCode === 417) {
             App.seekKeyHeld = null;
             App.seekKeyTime = 0;
         }
@@ -1394,7 +1394,11 @@ function setupRemote() {
                     Comments.reset();
                     Player.stop();
                     break;
-                case 415: case 13: // PLAY or OK
+                // Tizen media keycodes: MediaPlayPause=10252, MediaPlay=415, MediaPause=19
+                case 10252: // MediaPlayPause
+                case 415: // PLAY
+                case 19: // PAUSE
+                case 13: // OK/ENTER
                     if (App.playerMode === "BYPASS") p.paused ? p.play() : p.pause();
                     break;
                 case 37: // LEFT - seek back with acceleration
@@ -1407,6 +1411,25 @@ function setupRemote() {
                     }
                     break;
                 case 39: // RIGHT - seek forward with acceleration
+                    if (App.playerMode === "BYPASS") {
+                        if (App.seekKeyHeld !== 'right') {
+                            App.seekKeyHeld = 'right';
+                            App.seekKeyTime = performance.now();
+                        }
+                        Player.seek('right', App.seekKeyHeld === 'right');
+                    }
+                    break;
+                // Tizen media keycodes: MediaRewind=412, MediaFastForward=417
+                case 412: // REWIND
+                    if (App.playerMode === "BYPASS") {
+                        if (App.seekKeyHeld !== 'left') {
+                            App.seekKeyHeld = 'left';
+                            App.seekKeyTime = performance.now();
+                        }
+                        Player.seek('left', App.seekKeyHeld === 'left');
+                    }
+                    break;
+                case 417: // FAST FORWARD
                     if (App.playerMode === "BYPASS") {
                         if (App.seekKeyHeld !== 'right') {
                             App.seekKeyHeld = 'right';
