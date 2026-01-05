@@ -1,10 +1,18 @@
-/* TinyTube Pro v6.1.0 - Enhanced UI for Tizen 4.0 */
+/* TinyTube Pro v11.4 - Enhanced UI for Tizen 4.0 with Performance Optimizations */
+
+/* Font display optimization for faster rendering */
+@font-face {
+    font-family: 'Segoe UI';
+    font-display: swap;
+}
+
 body {
     margin: 0;
     background: #0a0a0a;
     color: #f1f1f1;
     font-family: 'Segoe UI', Roboto, sans-serif;
     overflow: hidden;
+    contain: layout style;
 }
 .hidden { display: none !important; }
 
@@ -22,6 +30,7 @@ body {
     z-index: 10;
     transition: width 0.3s cubic-bezier(0.2,0,0,1);
     box-shadow: 2px 0 20px rgba(0,0,0,0.5);
+    contain: layout style paint;
 }
 #sidebar.expanded {
     width: 260px;
@@ -35,6 +44,7 @@ body {
     display: flex;
     flex-direction: column;
     background: linear-gradient(135deg, #0a0a0a 0%, #111 100%);
+    contain: layout style;
 }
 
 /* HEADER ROW */
@@ -157,6 +167,7 @@ body {
     flex-grow: 1;
     margin-left: -1%;
     width: 102%;
+    contain: layout style;
 }
 #grid-container::-webkit-scrollbar { width: 6px; }
 #grid-container::-webkit-scrollbar-track { background: #111; }
@@ -195,6 +206,7 @@ body {
     position: relative;
     background: linear-gradient(135deg, #222 0%, #1a1a1a 100%);
     overflow: hidden;
+    contain: layout style paint;
 }
 .thumb {
     position: absolute;
@@ -272,6 +284,7 @@ body {
 
 .meta {
     padding: 14px 16px;
+    contain: layout style paint;
 }
 .meta h3 {
     margin: 0;
