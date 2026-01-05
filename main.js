@@ -497,8 +497,9 @@ const Extractor = {
             if (!parsed || !parsed.url) return "";
             if (parsed.sig) return `${parsed.url}&${parsed.sp}=${parsed.sig}`;
             if (parsed.s) {
-                // UPDATE: Use the Cipher Engine
-                const deciphered = Cipher.decipher(parsed.s, CONFIG.CIPHER_SEQUENCE);
+                // UPDATE: Use the Cipher Engine with cache-first strategy
+                const sequence = CipherBreaker.cache || CONFIG.CIPHER_SEQUENCE;
+                const deciphered = Cipher.decipher(parsed.s, sequence);
                 return `${parsed.url}&${parsed.sp}=${deciphered}`;
             }
         }
@@ -989,7 +990,7 @@ const Player = {
             if (c.srclang) track.srclang = c.srclang;
             track.src = c.src;
             p.appendChild(track);
-            App.captionTracks.push(track);
+            App.captionTracks.push({track: track, srclang: c.srclang, label: c.label});
         });
         if (storedLang) Player.setCaptionMode(storedLang, "showing");
     },
@@ -1102,6 +1103,7 @@ const Player = {
                     if (!isCurrent()) return;
                     App.currentVideoData = data;
                     await Player.loadUpNext(data, vId);
+                    if (!isCurrent()) return;
                     Player.setupCaptions(data);
                     const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
                     const cappedFormats = Utils.applyResolutionCap(formats);
@@ -1133,8 +1135,11 @@ const Player = {
 
         if (!App.upNext.length) {
             await Player.loadUpNext(null, vId);
+            if (!isCurrent()) return;
         }
-        
+
+        if (!isCurrent()) return;
+
         if (streamUrl) {
             App.currentStreamUrl = streamUrl;
             p.src = streamUrl;
@@ -1259,7 +1264,7 @@ const Player = {
             App.lastRenderDuration = duration;
             pe.currTime.textContent = Utils.formatTime(p.currentTime);
             pe.totalTime.textContent = Utils.formatTime(duration);
-            if (hasFiniteDuration && p.buffered.length) {
+            if (hasFiniteDuration && p.buffered.length > 0) {
                 pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / duration})`;
             }
         }
@@ -1367,6 +1372,8 @@ const Player = {
         App.lastRenderDuration = null;
         App.currentStreamUrl = null;
         App.upNext = [];
+        App.seekKeyHeld = null;
+        App.seekKeyTime = 0;
         HUD.renderUpNext();
         Player.clearCaptions();
         ScreenSaver.restore();
@@ -1654,7 +1661,11 @@ const PlayerControls = {
 // --- 9. INPUT ROUTER ---
 function setupRemote() {
     document.addEventListener("visibilitychange", () => {
-        if (document.hidden && App.view === "PLAYER") el("native-player").pause();
+        if (document.hidden && App.view === "PLAYER") {
+            el("native-player").pause();
+            App.seekKeyHeld = null;
+            App.seekKeyTime = 0;
+        }
     });
     document.addEventListener('keyup', (e) => {
         if ([37,39,412,417].includes(e.keyCode)) { App.seekKeyHeld = null; App.seekKeyTime = 0; }
