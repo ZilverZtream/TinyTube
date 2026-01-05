@@ -87,11 +87,18 @@ const Quality = {
         TinyTube.App.currentQuality = quality;
         TinyTube.App.currentStreamUrl = quality.url;
         player.src = quality.url;
-        player.currentTime = currentTime;
 
-        if (wasPlaying) {
-            player.play().catch(e => console.log('Play after quality change failed:', e));
-        }
+        const resumePlayback = () => {
+            player.removeEventListener('loadedmetadata', resumePlayback);
+            player.removeEventListener('canplay', resumePlayback);
+            player.currentTime = currentTime;
+            if (wasPlaying) {
+                player.play().catch(e => console.log('Play after quality change failed:', e));
+            }
+        };
+
+        player.addEventListener('loadedmetadata', resumePlayback);
+        player.addEventListener('canplay', resumePlayback);
 
         TinyTube.Utils.toast(`Quality: ${quality.qualityLabel || quality.height + 'p'}`);
         Quality.close();
