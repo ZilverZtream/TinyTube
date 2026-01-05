@@ -1,110 +1,105 @@
-# TinyTube Pro (Tizen Edition)
+# TinyTube Pro (v11.1)
 
-![Platform](https://img.shields.io/badge/Platform-Samsung_Tizen-blue)
-![Architecture](https://img.shields.io/badge/Architecture-Distributed_Client_State-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
+**YouTube Client for Legacy Tizen TVs (2017+).**
 
-**TinyTube Pro** is a privacy-first, serverless YouTube client designed for Samsung Tizen Smart TVs.
+TinyTube Pro is a high-performance, ad-free YouTube client engineered specifically for Tizen 4.0 (Chromium 56) environments. It bridges the gap between ancient hardware and modern YouTube anti-bot defenses using advanced client-side extraction and stealth emulation.
 
-Unlike traditional clients that rely on Google's central authentication servers, TinyTube Pro implements a **Distributed Client-Side State Engine**. It aggregates content from a mesh of public APIs directly on the TV hardware, creating a personalized "Virtual Feed" without ever requiring a Google Login or tracking cookies.
+![Version](https://img.shields.io/badge/version-11.1.0-blue) ![Platform](https://img.shields.io/badge/platform-Tizen%204.0%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange)
 
 ---
 
-## 🏆 Engineering Highlights
+## 🚀 Key Features
 
-This project demonstrates **Resilient Frontend Architecture** in a constrained TV environment:
+### 🛡️ "Stealth Mode" Engine (New in v10+)
+* **Android Client Emulation:** Impersonates the official YouTube Android App (v20.51.39) to bypass Google's "Sign in to confirm you're not a bot" checks.
+* **Direct 1080p Streaming:** Fetches unthrottled MP4/DASH streams directly from Google servers using the internal Protobuf-JSON API (`/youtubei/v1`).
+* **No API Keys Required:** Uses the "Stealth" method (no public key in URL) to remain undetected.
 
-### 1. Client-Side "Virtual Database"
-Instead of syncing with a remote server, the app manages user state (Subscriptions, Profiles, History) entirely in the TV's secure local storage (`localStorage`).
-* **Privacy**: Zero data is sent to Google.
-* **Speed**: O(1) profile switching with no network handshake.
+### ⚡ Performance
+* **60 FPS UI Loop:** Render loop decoupled from network activity using `requestAnimationFrame`.
+* **O(1) LRU Caching:** Custom Double-Linked List memory management for instant navigation.
+* **Binary Search Skipping:** Instant SponsorBlock segment processing (O(log n)).
+* **Request Deduplication:** Prevents network congestion when mashing remote buttons.
 
-### 2. Parallel Feed Aggregation (Map-Reduce)
-The "Home" feed is not a single API endpoint. The **Feed Engine**:
-1.  Reads the local subscription list.
-2.  Fires $O(n)$ parallel asynchronous requests to the API mesh.
-3.  Merges, sorts by date, and deduplicates results client-side.
-* **Result**: A generated "Subscribed Feed" that feels native but exists only on the device.
-
-### 3. Network Resilience & Latency Arbitration
-On boot, the `Network.connect()` module performs a race-condition latency check against a hardcoded list of high-uptime Invidious/Piped instances (Nadeko, Yewtu, etc.). It automatically routes traffic through the fastest, healthiest node.
-
-### 4. Dual-Mode Playback Engine
-* **Bypass Mode (Default)**: Plays raw `.mp4` streams directly via HTML5. Ad-injection scripts are physically impossible to execute.
-* **Enforcement Mode (Fallback)**: A sandboxed IFrame implementation of the official player, used as a failover if public APIs go dark.
+### 📺 Playback Experience
+* **Ad-Free:** Native blocking of all video ads and tracking pixels.
+* **SponsorBlock:** Auto-skips Sponsors, Intros, Outros, and Self-Promotion.
+* **DeArrow:** Replaces clickbait thumbnails and titles with community-crowdsourced accurate versions.
+* **Resume Watching:** Locally saves playback position for the last 50 videos.
+* **Playback Speed:** Toggle between 0.5x, 1.0x, 1.25x, 1.5x, and 2.0x.
+* **Captions:** Full subtitle support (direct from Google).
 
 ---
 
-## ✨ Key Features
+## 🏗️ Architecture: "The 2026 Standard"
 
-* **🚫 Ad-Block & SponsorBlock**: Auto-skips in-video sponsor segments, intros, and reminders.
-* **🛑 DeArrow Integration**: Replaces clickbait thumbnails and sensationalized titles with community-sourced, factual alternatives in real-time.
-* **👤 Multi-Profile Support**: Switch between local user profiles (e.g., "Dad", "Kid") with separate subscription lists.
-* **📺 Leanback UI**: A fully native "10-foot UI" experience optimized for TV remotes using Spatial Navigation logic.
-* **🔍 Universal Search**: Search for both Videos and Channels to subscribe.
+TinyTube Pro uses a **3-Stage Waterfall Strategy** to guarantee playback resilience:
 
----
-
-## 🛠️ Installation Guide
-
-TinyTube Pro is a standard Tizen Web Widget (`.wgt`). No "Developer Mode" root hacks are required if using Tizen Studio.
-
-### Prerequisites
-* **Samsung TV** (Tizen 4.0 or higher recommended)
-* **Tizen Studio** (installed on PC/Mac)
-
-### Build & Deploy
-1.  **Create Project**: Open Tizen Studio -> `File` -> `New` -> `Tizen Project` -> `Template` -> `TV` -> `Web Application`.
-2.  **Import Files**: Delete the default template files. Copy `config.xml`, `index.html`, `style.css`, `main.js`, and `icon.png` into the project root.
-3.  **Connect TV**: Use "Remote Device Manager" to connect your TV (Ensure TV and PC are on the same Wi-Fi).
-4.  **Run**: Right-click the project -> `Run As` -> `Tizen Web Application`.
+1.  **Stage 1: Primary (Invidious Perditum)**
+    * Connects to the high-health `inv.perditum.com` instance.
+    * Fastest response time, strips tracking, delivers clean proxy URLs.
+2.  **Stage 2: Secondary (Innertube Stealth)**
+    * If the API fails, the app switches to **Client-Side Extraction**.
+    * It emulates an Android device to negotiate directly with YouTube's private API.
+3.  **Stage 3: Fallback (Native Embed)**
+    * If all else fails (e.g., Age-Gated content), it loads the official YouTube Iframe player.
 
 ---
 
 ## 🎮 Controls
 
-| Remote Key | Action |
+Designed for standard IR Remotes.
+
+| Key | Action |
 | :--- | :--- |
-| **Arrows** | Navigate Grid / Menu |
-| **Enter / OK** | Play Video / Open Menu / Keyboard |
-| **Back / Return** | Close Player / Exit App |
-| **Blue Button (D)** | **Subscribe** / Unsubscribe to focused channel |
-| **Red Button (A)** | **Toggle Enforcement Mode** (Live Compare) |
-| **Play/Pause** | Media Controls |
+| **D-Pad** | Navigate Grid / Menu |
+| **Enter / OK** | Play Video / Open Keyboard |
+| **Back / Return** | Go Back / Stop Video / Exit (Double Press) |
+| **Play/Pause** | Toggle Playback |
+| **Left / Right** | Seek 10s (Hold for 30s/60s acceleration) |
+| **Red (A)** | **Force Embed Mode** (Use if video fails) |
+| **Green (B)** | *Cycle Playback Speed* |
+| **Yellow (C)** | **Toggle Video Info** (Description/Metadata) |
+| **Blue (D)** | **Subscribe** / Unsubscribe |
+| **Info / Guide** | Toggle Captions |
+| **Chan Up/Down** | Scroll Comments / Info Overlay |
+
+---
+
+## 🛠️ Installation
+
+### Prerequisites
+* **Tizen Studio** (with TV Extensions 4.0 or higher).
+* Samsung TV (2017 model or newer) with Developer Mode enabled.
+
+### Steps
+1.  Clone this repository.
+2.  Open **Tizen Studio**.
+3.  File -> Import -> Tizen -> Tizen Project.
+4.  Select the `TinyTube` folder.
+5.  Right-click project -> **Build Signed Package**.
+6.  Connect your TV via Device Manager.
+7.  Right-click project -> **Run As** -> **Tizen Web Application**.
 
 ---
 
 ## ⚙️ Configuration
 
-### Switching Profiles
-1.  Navigate to **Settings** in the sidebar.
-2.  Click **"Switch Profile"**.
-3.  The app reloads with the new user's local database.
+The app is zero-config out of the box, but you can customize it via the **Settings** tab (Gear Icon):
 
-### Custom API (Power Users)
-If the public mesh network is slow, you can host your own Invidious instance (or use a private one).
-1.  Go to **Settings**.
-2.  Enter your URL in **Custom API** (e.g., `http://192.168.1.50:3000/api/v1`).
-3.  Click **Save & Reboot**.
+* **Profile Name:** Change the display name for the local user.
+* **Custom API:** Override the internal fallback list with your own Invidious instance URL.
+* **Switch Profile:** Toggle between 3 local profiles (separate Watch History/Subs).
 
 ---
 
-## ⚠️ Comparison Demo (For Class)
+## 📝 Credits & Acknowledgments
 
-For the engineering demonstration, use the **Red Button** during playback to toggle the renderer:
-
-1.  **Bypass Mode (Green Badge)**:
-    * *Networking*: Fetching raw `.mp4` from proxy.
-    * *Ads*: None.
-    * *Privacy*: High.
-2.  **Enforcement Mode (Red Toast)**:
-    * *Networking*: Loads Google's heavy JS player.
-    * *Ads*: Server-side injected (Unskippable).
-    * *Privacy*: Low (Google tracking active).
+* **Invidious Project:** For the open-source API powering the primary feed.
+* **Ajay Ramachandran:** For the SponsorBlock and DeArrow APIs.
+* **Reverse Engineering Community:** For the Android Client emulation parameters.
+* **The "Professor":** For pushing the architecture from simple scraping to robust emulation.
 
 ---
 
-## 📄 License
-
-This project is for educational and research purposes.
-MIT License.
+*Built with ❤️ (and pure Vanilla JS) for the Tizen Community.*
