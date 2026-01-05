@@ -638,7 +638,7 @@ const Player = {
         };
     },
 
-    start: async (item) => {
+    start: async (item, retryCount = 0) => {
         if (!item) return;
         App.view = "PLAYER";
         App.playerMode = "BYPASS";
@@ -670,6 +670,7 @@ const Player = {
         }
 
         const p = App.playerElements.player;
+        let errorHandled = false;
         if (posterUrl) p.poster = posterUrl;
 
         // Show buffering spinner
@@ -686,6 +687,23 @@ const Player = {
                 }
             })
             .catch(() => { App.sponsorSegs = []; });
+
+        const handlePlaybackError = () => {
+            if (errorHandled) return;
+            if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
+            errorHandled = true;
+            App.streamCache.map.delete(vId);
+            App.currentVideoData = null;
+            App.playerElements.bufferingSpinner.classList.add("hidden");
+            if (retryCount < 1) {
+                Player.start(item, retryCount + 1);
+            } else {
+                Player.enforce(vId);
+            }
+        };
+
+        p.onerror = handlePlaybackError;
+        p.onstalled = handlePlaybackError;
 
         if (App.api) {
             // Check stream cache first
