@@ -369,7 +369,20 @@ const UI = {
         img.src = "default.png";
     },
     renderGrid: (data) => {
-        const items = (data || []).filter(item => item && ["video", "channel", "shortVideo", "playlist"].includes(item.type));
+        const items = (data || [])
+            .map((item) => {
+                if (!item || item.type) return item;
+                let inferredType = null;
+                if (item.videoId || item.videoThumbnails) {
+                    inferredType = "video";
+                } else if (item.authorId && item.authorThumbnails) {
+                    inferredType = "channel";
+                } else if (item.playlistId || item.videos) {
+                    inferredType = "playlist";
+                }
+                return inferredType ? { ...item, type: inferredType } : item;
+            })
+            .filter(item => item && ["video", "channel", "shortVideo", "playlist"].includes(item.type));
         TinyTube.App.items = items;
         const grid = el("grid-container");
         if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.disconnect();
