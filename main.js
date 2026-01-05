@@ -1,5 +1,14 @@
 /**
- * TinyTube Pro v6.0.2 (Tizen 4.0+ Optimized)
+ * TinyTube Pro v6.1.0 (Tizen 4.0+ Optimized)
+ *
+ * v6.1.0 Changes:
+ * - CRITICAL FIX: Ghost Menu Bug - Captions overlay now receives remote input
+ * - CRITICAL FIX: Info Overlay Trap - Can now scroll description with UP/DOWN
+ * - NEW: Centralized Input Router with activeLayer tracking (NONE, CONTROLS, COMMENTS, CAPTIONS, INFO)
+ * - NEW: Captions controller with full keyboard navigation
+ * - NEW: Player.scrollInfo() for scrolling long video descriptions
+ * - FIX: All overlays properly lock/unlock input focus
+ * - FIX: HUD properly pins when any overlay is visible
  *
  * v6.0.2 Changes:
  * - FIX: Zombie audio race condition - verify app state after async fetch in Player.start
@@ -120,6 +129,9 @@ const App = {
     screenSaverState: null,
     // Watch history for resume
     watchHistory: null,
+    // Input layer routing - v6.1.0: Centralized input router
+    // NONE = standard player, CONTROLS = control bar, COMMENTS/CAPTIONS/INFO = overlays
+    activeLayer: "NONE",
     playerControls: {
         active: false,
         index: 0
@@ -816,6 +828,7 @@ const Player = {
         App.playbackSpeedIdx = 0;
         App.playerControls.active = false;
         App.playerControls.index = 0;
+        App.activeLayer = "NONE";
         App.currentVideoData = null;
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
@@ -1075,6 +1088,8 @@ const Player = {
 
         if (isVisible) {
             overlay.classList.add("hidden");
+            App.activeLayer = "CONTROLS";
+            PlayerControls.setActive(true);
         } else {
             if (Comments.isOpen()) Comments.close();
             el("captions-overlay").classList.add("hidden");
@@ -1088,8 +1103,16 @@ const Player = {
                 el("info-description").textContent = data.description || "No description available.";
             }
             overlay.classList.remove("hidden");
+            App.activeLayer = "INFO";
         }
         HUD.refreshPinned();
+    },
+
+    scrollInfo: (direction) => {
+        const overlay = el("video-info-overlay");
+        if (overlay.classList.contains("hidden")) return;
+        const delta = 80 * direction;
+        overlay.scrollTop = Utils.clamp(overlay.scrollTop + delta, 0, overlay.scrollHeight);
     },
 
     stop: () => {
@@ -1123,6 +1146,7 @@ const Player = {
         App.seekKeyHeld = null;
         App.playerControls.active = false;
         App.playerControls.index = 0;
+        App.activeLayer = "NONE";
         Player.clearCaptions();
         ScreenSaver.restore();
     }
@@ -1173,12 +1197,15 @@ const Comments = {
         Comments.elements.overlay.classList.remove("hidden");
         el("video-info-overlay").classList.add("hidden");
         el("captions-overlay").classList.add("hidden");
+        App.activeLayer = "COMMENTS";
+        HUD.refreshPinned();
 
         if (Comments.state.videoId !== App.currentVideoId) {
             Comments.reset();
             Comments.state.open = true;
             Comments.elements.overlay.classList.remove("hidden");
             Comments.elements.list.textContent = "Loading comments...";
+            App.activeLayer = "COMMENTS";
             await Comments.loadPage();
         }
     },
@@ -1186,6 +1213,9 @@ const Comments = {
         if (!Comments.elements) Comments.cacheElements();
         Comments.state.open = false;
         Comments.elements.overlay.classList.add("hidden");
+        App.activeLayer = "CONTROLS";
+        PlayerControls.setActive(true);
+        HUD.refreshPinned();
     },
     toggle: () => {
         if (Comments.isOpen()) {
@@ -1280,6 +1310,50 @@ const Comments = {
     }
 };
 
+// --- 6b. CAPTIONS CONTROLLER (v6.1.0) ---
+const Captions = {
+    index: 0,
+    buttons: [],
+    isOpen: () => !el("captions-overlay").classList.contains("hidden"),
+    open: () => {
+        App.activeLayer = "CAPTIONS";
+        Player.openCaptionsMenu();
+        // Re-query buttons after they are created
+        Captions.buttons = Array.from(document.querySelectorAll(".captions-option"));
+        Captions.index = Captions.buttons.findIndex(b => b.classList.contains("active"));
+        if (Captions.index === -1) Captions.index = 0;
+        Captions.updateFocus();
+        HUD.refreshPinned();
+    },
+    close: () => {
+        el("captions-overlay").classList.add("hidden");
+        App.activeLayer = "CONTROLS";
+        PlayerControls.setActive(true);
+        HUD.refreshPinned();
+    },
+    move: (delta) => {
+        if (!Captions.buttons.length) return;
+        Captions.index = (Captions.index + delta + Captions.buttons.length) % Captions.buttons.length;
+        Captions.updateFocus();
+    },
+    updateFocus: () => {
+        Captions.buttons.forEach((b, i) => {
+            if (i === Captions.index) {
+                b.classList.add("focused");
+                b.scrollIntoView({ block: "center", behavior: "smooth" });
+            } else {
+                b.classList.remove("focused");
+            }
+        });
+    },
+    select: () => {
+        if (Captions.buttons[Captions.index]) {
+            Captions.buttons[Captions.index].click();
+        }
+        Captions.close();
+    }
+};
+
 const PlayerControls = {
     ids: [
         "control-play",
@@ -1299,10 +1373,10 @@ const PlayerControls = {
         "control-back": () => Player.seek("left"),
         "control-forward": () => Player.seek("right"),
         "control-captions": () => Player.toggleCaptions(),
-        "control-language": () => Player.openCaptionsMenu(),
+        "control-language": () => Captions.open(), // Use Captions controller with proper layer management
         "control-comments": () => {
-            PlayerControls.setActive(false);
-            Comments.toggle();
+            App.activeLayer = "COMMENTS";
+            Comments.open();
         },
         "control-subscribe": () => {
             const item = App.items[App.focus.index];
@@ -1330,8 +1404,13 @@ const PlayerControls = {
     },
     setActive: (active) => {
         App.playerControls.active = active;
-        if (active && App.playerControls.index >= PlayerControls.buttons.length) {
-            App.playerControls.index = 0;
+        if (active) {
+            if (App.playerControls.index >= PlayerControls.buttons.length) {
+                App.playerControls.index = 0;
+            }
+            App.activeLayer = "CONTROLS";
+        } else {
+            App.activeLayer = "NONE";
         }
         HUD.refreshPinned();
         UI.updateFocus();
@@ -1394,49 +1473,94 @@ function setupRemote() {
             const p = App.playerElements ? App.playerElements.player : el("native-player");
             const item = App.items[App.focus.index];
 
-            if (Comments.isOpen()) {
+            // ============================================
+            // v6.1.0: CENTRALIZED INPUT ROUTER
+            // Route keys based on activeLayer to fix Ghost Menu bug
+            // ============================================
+
+            // 1. Handle COMMENTS layer (highest priority overlay)
+            if (App.activeLayer === "COMMENTS") {
                 switch (e.keyCode) {
-                    case 38: // UP
+                    case 38: // UP - scroll comments
                         Comments.scroll(-1);
-                        break;
-                    case 40: // DOWN
+                        return;
+                    case 40: // DOWN - scroll comments
                         Comments.scroll(1);
-                        break;
-                    case 10009: // BACK
+                        return;
+                    case 10009: // BACK - close comments
                         Comments.close();
-                        break;
-                    case 405: // YELLOW
+                        return;
+                    case 405: // YELLOW - toggle comments
                         Comments.toggle();
-                        break;
+                        return;
                 }
-                if (e.keyCode === 38 || e.keyCode === 40 || e.keyCode === 10009 || e.keyCode === 405) return;
             }
 
-            if (App.playerControls.active) {
+            // 2. Handle CAPTIONS layer (v6.1.0 fix for Ghost Menu bug)
+            if (App.activeLayer === "CAPTIONS") {
                 switch (e.keyCode) {
-                    case 37: // LEFT
+                    case 38: // UP - navigate captions menu
+                        Captions.move(-1);
+                        return;
+                    case 40: // DOWN - navigate captions menu
+                        Captions.move(1);
+                        return;
+                    case 13: // ENTER - select caption language
+                        Captions.select();
+                        return;
+                    case 10009: // BACK - close captions menu
+                        Captions.close();
+                        return;
+                }
+            }
+
+            // 3. Handle INFO layer (v6.1.0 fix for Info Overlay Trap)
+            if (App.activeLayer === "INFO") {
+                switch (e.keyCode) {
+                    case 38: // UP - scroll info up
+                        Player.scrollInfo(-1);
+                        return;
+                    case 40: // DOWN - scroll info down
+                        Player.scrollInfo(1);
+                        return;
+                    case 10009: // BACK - close info overlay
+                    case 457: // INFO - toggle info overlay
+                        Player.toggleInfo();
+                        return;
+                }
+            }
+
+            // 4. Handle CONTROLS layer (player control bar)
+            if (App.activeLayer === "CONTROLS") {
+                switch (e.keyCode) {
+                    case 37: // LEFT - move to previous control
                         PlayerControls.move(-1);
                         return;
-                    case 39: // RIGHT
+                    case 39: // RIGHT - move to next control
                         PlayerControls.move(1);
                         return;
-                    case 38: // UP
+                    case 38: // UP - exit controls layer
                         PlayerControls.setActive(false);
                         return;
-                    case 13: // ENTER
-                    case 415: // PLAY or OK
+                    case 10009: // BACK - exit controls (not player)
+                        PlayerControls.setActive(false);
+                        return;
+                    case 13: // ENTER - activate focused control
+                    case 415: // PLAY/OK - activate focused control
                         PlayerControls.activateFocused();
                         return;
                 }
             }
 
-            if (e.keyCode === 40) { // DOWN - focus player controls
+            // 5. Handle NONE layer (standard player controls)
+            // DOWN activates control bar
+            if (e.keyCode === 40) {
                 PlayerControls.setActive(true);
                 return;
             }
 
             switch (e.keyCode) {
-                case 10009: // BACK
+                case 10009: // BACK - Exit Player
                     App.view = "BROWSE";
                     el("player-layer").classList.add("hidden");
                     Comments.reset();
@@ -1505,7 +1629,7 @@ function setupRemote() {
                     Comments.toggle();
                     break;
                 case 406: // BLUE - Subscribe
-                    if (item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
+                    if (item && item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
                     break;
                 case 457: // INFO button (some remotes)
                     if (!App.infoKeyTimer) {
@@ -1713,8 +1837,12 @@ const HUD = {
         }, 4000);
     },
     refreshPinned: () => {
-        const overlayVisible = !el("video-info-overlay").classList.contains("hidden");
-        HUD.pinned = App.playerControls.active || overlayVisible;
+        // v6.1.0: Check all overlay layers for pinning HUD
+        const infoVisible = !el("video-info-overlay").classList.contains("hidden");
+        const commentsVisible = !el("comments-overlay").classList.contains("hidden");
+        const captionsVisible = !el("captions-overlay").classList.contains("hidden");
+        const anyOverlayVisible = infoVisible || commentsVisible || captionsVisible;
+        HUD.pinned = App.playerControls.active || anyOverlayVisible || App.activeLayer !== "NONE";
         if (HUD.pinned) {
             el("player-hud").classList.add("visible");
             clearTimeout(App.hudTimer);

@@ -1,4 +1,4 @@
-/* TinyTube Pro v6.0.0 - Enhanced UI for Tizen 4.0 */
+/* TinyTube Pro v6.1.0 - Enhanced UI for Tizen 4.0 */
 body {
     margin: 0;
     background: #0a0a0a;
@@ -789,6 +789,17 @@ iframe {
 .captions-option.active {
     border-color: #ff3333;
     color: #fff;
+}
+.captions-option.focused {
+    background: #333;
+    border-color: #fff;
+    color: #fff;
+    box-shadow: 0 0 15px rgba(255,255,255,0.2);
+    transform: scale(1.02);
+}
+.captions-option.active.focused {
+    border-color: #ff5555;
+    box-shadow: 0 0 20px rgba(255,51,51,0.4);
 }
 .captions-option:disabled {
     opacity: 0.5;
