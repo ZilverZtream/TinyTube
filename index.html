@@ -19,6 +19,9 @@
         <div class="brand">TT</div>
         <div class="menu-item focused" id="menu-home"><span class="icon">🏠</span> <span class="label">Home</span></div>
         <div class="menu-item" id="menu-subs"><span class="icon">📚</span> <span class="label">My Subs</span></div>
+        <div class="menu-item" id="menu-trending"><span class="icon">🔥</span> <span class="label">Trending</span></div>
+        <div class="menu-item" id="menu-history"><span class="icon">🕐</span> <span class="label">History</span></div>
+        <div class="menu-item" id="menu-watchlater"><span class="icon">⏰</span> <span class="label">Watch Later</span></div>
         <div class="menu-item" id="menu-search"><span class="icon">🔍</span> <span class="label">Search</span></div>
         <div class="menu-item" id="menu-settings"><span class="icon">⚙️</span> <span class="label">Settings</span></div>
         <div class="spacer"></div>
@@ -35,6 +38,24 @@
             <div id="clock">00:00</div>
         </div>
         <input id="search-input" type="text" placeholder="Search..." class="hidden" />
+
+        <!-- Search Filters -->
+        <div id="search-filters" class="hidden">
+            <button class="filter-btn" id="filter-sort">Sort: Relevance ▼</button>
+            <button class="filter-btn" id="filter-date">Date: Any ▼</button>
+            <button class="filter-btn" id="filter-duration">Duration: Any ▼</button>
+            <button class="filter-btn" id="filter-type">Type: Video ▼</button>
+        </div>
+
+        <!-- Trending Category Tabs -->
+        <div id="trending-tabs" class="hidden">
+            <button class="cat-tab active" data-cat="">All</button>
+            <button class="cat-tab" data-cat="Music">Music</button>
+            <button class="cat-tab" data-cat="Gaming">Gaming</button>
+            <button class="cat-tab" data-cat="News">News</button>
+            <button class="cat-tab" data-cat="Movies">Movies</button>
+        </div>
+
         <div id="grid-container"></div>
     </div>
 
@@ -79,6 +100,14 @@
                     <span class="control-icon">⏩</span>
                     <span class="control-label">10s Forward</span>
                 </button>
+                <button class="control-btn" id="control-quality" type="button">
+                    <span class="control-icon">⚙</span>
+                    <span class="control-label">Quality</span>
+                </button>
+                <button class="control-btn" id="control-chapters" type="button">
+                    <span class="control-icon">📑</span>
+                    <span class="control-label">Chapters</span>
+                </button>
                 <button class="control-btn" id="control-captions" type="button">
                     <span class="control-icon">CC</span>
                     <span class="control-label">Captions</span>
@@ -94,6 +123,10 @@
                 <button class="control-btn" id="control-subscribe" type="button">
                     <span class="control-icon">★</span>
                     <span class="control-label">Subscribe</span>
+                </button>
+                <button class="control-btn" id="control-watchlater" type="button">
+                    <span class="control-icon">⏰</span>
+                    <span class="control-label">Watch Later</span>
                 </button>
             </div>
             <div id="controls-hint">
@@ -150,6 +183,79 @@
                 <div id="captions-list" class="captions-list"></div>
             </div>
         </div>
+
+        <!-- Quality Selector Overlay -->
+        <div id="quality-overlay" class="hidden">
+            <div class="quality-panel">
+                <div class="quality-header">
+                    <div>
+                        <h2>Quality</h2>
+                        <div class="quality-meta">Select playback quality</div>
+                    </div>
+                </div>
+                <div id="quality-list" class="quality-list"></div>
+            </div>
+        </div>
+
+        <!-- Video Chapters Overlay -->
+        <div id="chapters-overlay" class="hidden">
+            <div class="chapters-panel">
+                <div class="chapters-header">
+                    <div>
+                        <h2>Chapters</h2>
+                        <div class="chapters-meta">Jump to chapter</div>
+                    </div>
+                </div>
+                <div id="chapters-list" class="chapters-list"></div>
+            </div>
+        </div>
+
+        <!-- Keyboard Shortcuts Guide -->
+        <div id="shortcuts-overlay" class="hidden">
+            <div class="shortcuts-panel">
+                <div class="shortcuts-header">
+                    <h2>Keyboard Shortcuts</h2>
+                    <div class="shortcuts-hint">Press OK to dismiss</div>
+                </div>
+                <div id="shortcuts-content" class="shortcuts-content">
+                    <div class="shortcuts-section">
+                        <h3>Navigation</h3>
+                        <div class="shortcut-item"><span class="shortcut-key">Arrow Keys</span><span class="shortcut-desc">Navigate menu/grid</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">Enter/OK</span><span class="shortcut-desc">Select item</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">Back</span><span class="shortcut-desc">Go back</span></div>
+                    </div>
+                    <div class="shortcuts-section">
+                        <h3>Playback</h3>
+                        <div class="shortcut-item"><span class="shortcut-key">Play/Pause</span><span class="shortcut-desc">Toggle playback</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">Left/Right</span><span class="shortcut-desc">Seek 10s/30s/60s</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">↑/↓</span><span class="shortcut-desc">Show/hide controls</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">Info (457)</span><span class="shortcut-desc">Toggle video info</span></div>
+                    </div>
+                    <div class="shortcuts-section">
+                        <h3>Color Keys</h3>
+                        <div class="shortcut-item"><span class="shortcut-key red-key">Red</span><span class="shortcut-desc">Toggle embed mode</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key green-key">Green</span><span class="shortcut-desc">Cycle playback speed</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key yellow-key">Yellow</span><span class="shortcut-desc">Open comments</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key blue-key">Blue</span><span class="shortcut-desc">Subscribe/Unsubscribe</span></div>
+                    </div>
+                    <div class="shortcuts-section">
+                        <h3>Browse Mode</h3>
+                        <div class="shortcut-item"><span class="shortcut-key">0-9</span><span class="shortcut-desc">Quick menu navigation</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">Q</span><span class="shortcut-desc">Add to Watch Later</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">C</span><span class="shortcut-desc">Open channel page</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">?</span><span class="shortcut-desc">Show this help</span></div>
+                    </div>
+                    <div class="shortcuts-section">
+                        <h3>Player Overlays</h3>
+                        <div class="shortcut-item"><span class="shortcut-key">C</span><span class="shortcut-desc">Captions</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">Q</span><span class="shortcut-desc">Quality selector</span></div>
+                        <div class="shortcut-item"><span class="shortcut-key">T</span><span class="shortcut-desc">Chapters/Timestamps</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
 
     <div id="settings-overlay" class="hidden">
         <div class="modal">

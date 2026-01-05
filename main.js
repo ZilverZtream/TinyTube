@@ -69,7 +69,17 @@ const CONFIG = {
     PRELOAD_THRESHOLD: 0.8,
     RESIZE_DEBOUNCE_MS: 150,
     SPONSORBLOCK_THROTTLE_MS: 500,
-    WEB_WORKER_ENABLED: typeof Worker !== 'undefined'
+    WEB_WORKER_ENABLED: typeof Worker !== 'undefined',
+    // New Features Configuration
+    WATCH_LATER_LIMIT: 100,
+    HISTORY_VIEW_LIMIT: 200,
+    TRENDING_CATEGORIES: ['Music', 'Gaming', 'News', 'Movies'],
+    SEARCH_FILTERS: {
+        sort: ['relevance', 'rating', 'upload_date', 'view_count'],
+        date: ['', 'hour', 'today', 'week', 'month', 'year'],
+        duration: ['', 'short', 'medium', 'long'],
+        type: ['video', 'playlist', 'channel']
+    }
 };
 
 // --- CHROME 56 POLYFILLS ---
@@ -445,7 +455,21 @@ const App = {
 
     nextVideoPreloader: null,
     preloadedNextVideo: null,
-    lastSponsorCheckTime: 0
+    lastSponsorCheckTime: 0,
+
+    // New Features State
+    currentChannelId: null,
+    currentPlaylistId: null,
+    currentTrendingCategory: '',
+    searchFilters: { sort: 'relevance', date: '', duration: '', type: 'video' },
+    watchLaterQueue: [],
+    videoChapters: [],
+    availableQualities: [],
+    currentQuality: null,
+    qualityIndex: 0,
+    chaptersIndex: 0,
+    filterFocusIndex: 0,
+    categoryFocusIndex: 0
 };
 
 const el = (id) => {
@@ -1032,6 +1056,79 @@ const DB = {
             delete App.watchHistory[videoId];
             SafeStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
         }
+    },
+    // Watch Later Queue Functions
+    getWatchLater: () => {
+        if (App.watchLaterQueue && App.watchLaterQueue.length > 0) return App.watchLaterQueue;
+        App.watchLaterQueue = Utils.safeParse(SafeStorage.getItem(`tt_watchlater_${App.profileId}`), []);
+        return App.watchLaterQueue;
+    },
+    addToWatchLater: (item) => {
+        if (!item || !item.videoId) return;
+        const queue = DB.getWatchLater();
+        const exists = queue.find(v => v.videoId === item.videoId);
+        if (exists) {
+            Utils.toast("Already in Watch Later");
+            return;
+        }
+        const videoData = {
+            videoId: item.videoId,
+            title: item.title,
+            author: item.author,
+            authorId: item.authorId,
+            videoThumbnails: item.videoThumbnails,
+            lengthSeconds: item.lengthSeconds,
+            addedAt: Date.now()
+        };
+        queue.unshift(videoData);
+        if (queue.length > CONFIG.WATCH_LATER_LIMIT) {
+            queue.pop();
+        }
+        App.watchLaterQueue = queue;
+        SafeStorage.setItem(`tt_watchlater_${App.profileId}`, JSON.stringify(queue));
+        Utils.toast("Added to Watch Later");
+    },
+    removeFromWatchLater: (videoId) => {
+        if (!videoId) return;
+        const queue = DB.getWatchLater();
+        App.watchLaterQueue = queue.filter(v => v.videoId !== videoId);
+        SafeStorage.setItem(`tt_watchlater_${App.profileId}`, JSON.stringify(App.watchLaterQueue));
+        Utils.toast("Removed from Watch Later");
+    },
+    isInWatchLater: (videoId) => {
+        const queue = DB.getWatchLater();
+        return !!queue.find(v => v.videoId === videoId);
+    },
+    // Full History View Functions
+    getFullHistory: () => {
+        if (!App.watchHistory) {
+            App.watchHistory = Utils.safeParse(SafeStorage.getItem(`tt_history_${App.profileId}`), {});
+        }
+        const history = [];
+        for (const videoId in App.watchHistory) {
+            const entry = App.watchHistory[videoId];
+            if (entry && entry.ts) {
+                history.push({
+                    videoId: videoId,
+                    position: entry.pos || 0,
+                    timestamp: entry.ts,
+                    title: entry.title || 'Unknown Video',
+                    author: entry.author || 'Unknown',
+                    authorId: entry.authorId || '',
+                    videoThumbnails: entry.videoThumbnails || []
+                });
+            }
+        }
+        history.sort((a, b) => b.timestamp - a.timestamp);
+        return history.slice(0, CONFIG.HISTORY_VIEW_LIMIT);
+    },
+    saveVideoToHistory: (videoId, videoData) => {
+        if (!videoId || !App.watchHistory[videoId]) return;
+        App.watchHistory[videoId].title = videoData.title || App.watchHistory[videoId].title;
+        App.watchHistory[videoId].author = videoData.author || App.watchHistory[videoId].author;
+        App.watchHistory[videoId].authorId = videoData.authorId || App.watchHistory[videoId].authorId;
+        App.watchHistory[videoId].videoThumbnails = videoData.videoThumbnails || App.watchHistory[videoId].videoThumbnails;
+        SafeStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
     }
 };
 
@@ -1098,6 +1195,83 @@ const Feed = {
         const subs = DB.getSubs();
         UI.renderGrid(subs.map(s => ({
             type: "channel", author: s.name, authorId: s.id, authorThumbnails: [{url: s.thumb}]
+        })));
+    },
+    // Channel Page View
+    loadChannel: async (channelId, channelName) => {
+        if (!channelId) return;
+        App.currentChannelId = channelId;
+        el("section-title").textContent = channelName || "Channel Videos";
+        el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Loading channel...</p></div>';
+        try {
+            const res = await Utils.fetchDedup(`${App.api}/channels/${channelId}/videos?page=1`);
+            if (!res.ok) throw new Error('Channel fetch failed');
+            const data = await res.json();
+            UI.renderGrid(Array.isArray(data) ? data : (data.videos || data.items || []));
+        } catch (e) {
+            el("grid-container").innerHTML = '<div class="network-error"><h3>Failed to Load Channel</h3><p>Try again later.</p></div>';
+        }
+    },
+    // Playlist Support
+    loadPlaylist: async (playlistId, playlistTitle) => {
+        if (!playlistId) return;
+        App.currentPlaylistId = playlistId;
+        el("section-title").textContent = playlistTitle || "Playlist";
+        el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Loading playlist...</p></div>';
+        try {
+            const res = await Utils.fetchDedup(`${App.api}/playlists/${playlistId}`);
+            if (!res.ok) throw new Error('Playlist fetch failed');
+            const data = await res.json();
+            UI.renderGrid(data.videos || data.items || []);
+        } catch (e) {
+            el("grid-container").innerHTML = '<div class="network-error"><h3>Failed to Load Playlist</h3><p>Try again later.</p></div>';
+        }
+    },
+    // Trending Categories
+    loadTrendingCategory: async (category) => {
+        App.currentTrendingCategory = category;
+        const title = category ? `Trending: ${category}` : "Trending";
+        el("section-title").textContent = title;
+        TrendingTabs.show();
+        TrendingTabs.setActive(category);
+        const endpoint = category ? `/trending?type=${category}` : '/trending';
+        await Feed.fetch(endpoint);
+    },
+    // Watch Later View
+    renderWatchLater: () => {
+        el("section-title").textContent = "Watch Later";
+        const queue = DB.getWatchLater();
+        if (queue.length === 0) {
+            el("grid-container").innerHTML = '<div class="empty-state"><div class="icon">⏰</div><h3>No Videos in Queue</h3><p>Add videos to watch later</p></div>';
+            VirtualScroll.reset();
+            return;
+        }
+        UI.renderGrid(queue.map(v => ({
+            type: 'video',
+            videoId: v.videoId,
+            title: v.title,
+            author: v.author,
+            authorId: v.authorId,
+            videoThumbnails: v.videoThumbnails,
+            lengthSeconds: v.lengthSeconds
+        })));
+    },
+    // Full History View
+    renderHistory: () => {
+        el("section-title").textContent = "Watch History";
+        const history = DB.getFullHistory();
+        if (history.length === 0) {
+            el("grid-container").innerHTML = '<div class="empty-state"><div class="icon">🕐</div><h3>No History</h3><p>Your watched videos will appear here</p></div>';
+            VirtualScroll.reset();
+            return;
+        }
+        UI.renderGrid(history.map(h => ({
+            type: 'video',
+            videoId: h.videoId,
+            title: h.title,
+            author: h.author,
+            authorId: h.authorId,
+            videoThumbnails: h.videoThumbnails
         })));
     }
 };
@@ -1339,7 +1513,342 @@ const UI = {
     }
 };
 
-// --- 7. PLAYER ---
+// --- 7. NEW FEATURE MODULES ---
+
+// Search Filters Module
+const SearchFilters = {
+    show: () => {
+        el("search-filters").classList.remove("hidden");
+    },
+    hide: () => {
+        el("search-filters").classList.add("hidden");
+        App.filterFocusIndex = 0;
+    },
+    updateUI: () => {
+        const filters = App.searchFilters;
+        const dateLabel = filters.date ? filters.date.charAt(0).toUpperCase() + filters.date.slice(1) : 'Any';
+        const durationLabel = filters.duration ? filters.duration.charAt(0).toUpperCase() + filters.duration.slice(1) : 'Any';
+        const sortLabel = filters.sort.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        const typeLabel = filters.type.charAt(0).toUpperCase() + filters.type.slice(1);
+
+        el("filter-sort").textContent = `Sort: ${sortLabel} ▼`;
+        el("filter-date").textContent = `Date: ${dateLabel} ▼`;
+        el("filter-duration").textContent = `Duration: ${durationLabel} ▼`;
+        el("filter-type").textContent = `Type: ${typeLabel} ▼`;
+    },
+    cycleSort: () => {
+        const sorts = CONFIG.SEARCH_FILTERS.sort;
+        const currentIndex = sorts.indexOf(App.searchFilters.sort);
+        App.searchFilters.sort = sorts[(currentIndex + 1) % sorts.length];
+        SearchFilters.updateUI();
+        App.actions.runSearch();
+    },
+    cycleDate: () => {
+        const dates = CONFIG.SEARCH_FILTERS.date;
+        const currentIndex = dates.indexOf(App.searchFilters.date);
+        App.searchFilters.date = dates[(currentIndex + 1) % dates.length];
+        SearchFilters.updateUI();
+        App.actions.runSearch();
+    },
+    cycleDuration: () => {
+        const durations = CONFIG.SEARCH_FILTERS.duration;
+        const currentIndex = durations.indexOf(App.searchFilters.duration);
+        App.searchFilters.duration = durations[(currentIndex + 1) % durations.length];
+        SearchFilters.updateUI();
+        App.actions.runSearch();
+    },
+    cycleType: () => {
+        const types = CONFIG.SEARCH_FILTERS.type;
+        const currentIndex = types.indexOf(App.searchFilters.type);
+        App.searchFilters.type = types[(currentIndex + 1) % types.length];
+        SearchFilters.updateUI();
+        App.actions.runSearch();
+    },
+    moveFocus: (delta) => {
+        const buttons = ['filter-sort', 'filter-date', 'filter-duration', 'filter-type'];
+        buttons.forEach(id => el(id).classList.remove('focused'));
+        App.filterFocusIndex = (App.filterFocusIndex + delta + buttons.length) % buttons.length;
+        el(buttons[App.filterFocusIndex]).classList.add('focused');
+    },
+    activateFocused: () => {
+        const actions = [SearchFilters.cycleSort, SearchFilters.cycleDate, SearchFilters.cycleDuration, SearchFilters.cycleType];
+        actions[App.filterFocusIndex]();
+    }
+};
+
+// Trending Category Tabs Module
+const TrendingTabs = {
+    show: () => {
+        el("trending-tabs").classList.remove("hidden");
+    },
+    hide: () => {
+        el("trending-tabs").classList.add("hidden");
+        App.categoryFocusIndex = 0;
+    },
+    setActive: (category) => {
+        const tabs = el("trending-tabs").querySelectorAll('.cat-tab');
+        tabs.forEach(tab => {
+            if (tab.dataset.cat === category) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+    },
+    moveFocus: (delta) => {
+        const tabs = el("trending-tabs").querySelectorAll('.cat-tab');
+        tabs.forEach(tab => tab.classList.remove('focused'));
+        App.categoryFocusIndex = (App.categoryFocusIndex + delta + tabs.length) % tabs.length;
+        tabs[App.categoryFocusIndex].classList.add('focused');
+    },
+    activateFocused: () => {
+        const tabs = el("trending-tabs").querySelectorAll('.cat-tab');
+        const category = tabs[App.categoryFocusIndex].dataset.cat;
+        Feed.loadTrendingCategory(category);
+    },
+    init: () => {
+        const tabs = el("trending-tabs").querySelectorAll('.cat-tab');
+        tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => {
+                Feed.loadTrendingCategory(tab.dataset.cat);
+            });
+        });
+    }
+};
+
+// Quality Selector Module
+const Quality = {
+    open: () => {
+        if (!App.availableQualities || App.availableQualities.length === 0) {
+            Utils.toast("No quality options available");
+            return;
+        }
+        const overlay = el("quality-overlay");
+        const list = el("quality-list");
+        if (!overlay || !list) return;
+
+        if (!overlay.classList.contains("hidden")) {
+            Quality.close();
+            return;
+        }
+
+        // Close other overlays
+        el("captions-overlay").classList.add("hidden");
+        el("chapters-overlay").classList.add("hidden");
+        el("video-info-overlay").classList.add("hidden");
+        if (Comments.isOpen()) Comments.close();
+
+        list.textContent = "";
+        App.qualityIndex = 0;
+
+        App.availableQualities.forEach((q, index) => {
+            const option = Utils.create("button", "quality-option");
+            option.type = "button";
+
+            const labelSpan = document.createElement('span');
+            labelSpan.textContent = q.qualityLabel || `${q.height}p`;
+            option.appendChild(labelSpan);
+
+            if (q.bitrate) {
+                const bitrateSpan = document.createElement('span');
+                bitrateSpan.className = 'quality-bitrate';
+                bitrateSpan.textContent = `${Math.round(q.bitrate / 1000)} kbps`;
+                option.appendChild(bitrateSpan);
+            }
+
+            if (App.currentQuality && App.currentQuality.url === q.url) {
+                option.classList.add('active');
+                App.qualityIndex = index;
+            }
+
+            if (index === App.qualityIndex) {
+                option.classList.add('focused');
+            }
+
+            option.addEventListener('click', () => Quality.select(index));
+            list.appendChild(option);
+        });
+
+        overlay.classList.remove("hidden");
+        App.activeLayer = "QUALITY";
+    },
+    close: () => {
+        el("quality-overlay").classList.add("hidden");
+        App.activeLayer = "NONE";
+    },
+    move: (delta) => {
+        const options = el("quality-list").querySelectorAll('.quality-option');
+        if (!options.length) return;
+
+        options[App.qualityIndex].classList.remove('focused');
+        App.qualityIndex = (App.qualityIndex + delta + options.length) % options.length;
+        options[App.qualityIndex].classList.add('focused');
+
+        // Scroll into view
+        options[App.qualityIndex].scrollIntoView({ block: 'nearest', behavior: App.supportsSmoothScroll ? 'smooth' : 'auto' });
+    },
+    select: (index) => {
+        if (index === undefined) index = App.qualityIndex;
+        const quality = App.availableQualities[index];
+        if (!quality || !quality.url) return;
+
+        const player = el("native-player");
+        if (!player) return;
+
+        const currentTime = player.currentTime;
+        const wasPlaying = !player.paused;
+
+        App.currentQuality = quality;
+        App.currentStreamUrl = quality.url;
+        player.src = quality.url;
+        player.currentTime = currentTime;
+
+        if (wasPlaying) {
+            player.play().catch(e => console.log('Play after quality change failed:', e));
+        }
+
+        Utils.toast(`Quality: ${quality.qualityLabel || quality.height + 'p'}`);
+        Quality.close();
+    }
+};
+
+// Video Chapters Module
+const Chapters = {
+    parseChapters: (description) => {
+        if (!description) return [];
+
+        const lines = description.split('\n');
+        const chapters = [];
+        const timestampRegex = /^(\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.+)$/;
+
+        for (const line of lines) {
+            const match = line.trim().match(timestampRegex);
+            if (match) {
+                const hours = match[1] ? parseInt(match[1].slice(0, -1)) : 0;
+                const minutes = parseInt(match[2]);
+                const seconds = parseInt(match[3]);
+                const title = match[4].trim();
+
+                const timeInSeconds = hours * 3600 + minutes * 60 + seconds;
+                chapters.push({ time: timeInSeconds, title: title });
+            }
+        }
+
+        // Only return if we found at least 2 chapters
+        return chapters.length >= 2 ? chapters : [];
+    },
+    open: () => {
+        if (!App.videoChapters || App.videoChapters.length === 0) {
+            Utils.toast("No chapters available");
+            return;
+        }
+
+        const overlay = el("chapters-overlay");
+        const list = el("chapters-list");
+        if (!overlay || !list) return;
+
+        if (!overlay.classList.contains("hidden")) {
+            Chapters.close();
+            return;
+        }
+
+        // Close other overlays
+        el("captions-overlay").classList.add("hidden");
+        el("quality-overlay").classList.add("hidden");
+        el("video-info-overlay").classList.add("hidden");
+        if (Comments.isOpen()) Comments.close();
+
+        list.textContent = "";
+        App.chaptersIndex = 0;
+
+        const player = el("native-player");
+        const currentTime = player ? player.currentTime : 0;
+
+        App.videoChapters.forEach((chapter, index) => {
+            const item = Utils.create("button", "chapter-item");
+            item.type = "button";
+
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'chapter-time';
+            timeSpan.textContent = Utils.formatTime(chapter.time);
+
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'chapter-title';
+            titleSpan.textContent = chapter.title;
+
+            item.appendChild(timeSpan);
+            item.appendChild(titleSpan);
+
+            // Mark current chapter
+            if (currentTime >= chapter.time) {
+                const nextChapter = App.videoChapters[index + 1];
+                if (!nextChapter || currentTime < nextChapter.time) {
+                    item.classList.add('active');
+                    App.chaptersIndex = index;
+                }
+            }
+
+            if (index === App.chaptersIndex) {
+                item.classList.add('focused');
+            }
+
+            item.addEventListener('click', () => Chapters.select(index));
+            list.appendChild(item);
+        });
+
+        overlay.classList.remove("hidden");
+        App.activeLayer = "CHAPTERS";
+    },
+    close: () => {
+        el("chapters-overlay").classList.add("hidden");
+        App.activeLayer = "NONE";
+    },
+    move: (delta) => {
+        const items = el("chapters-list").querySelectorAll('.chapter-item');
+        if (!items.length) return;
+
+        items[App.chaptersIndex].classList.remove('focused');
+        App.chaptersIndex = (App.chaptersIndex + delta + items.length) % items.length;
+        items[App.chaptersIndex].classList.add('focused');
+
+        // Scroll into view
+        items[App.chaptersIndex].scrollIntoView({ block: 'nearest', behavior: App.supportsSmoothScroll ? 'smooth' : 'auto' });
+    },
+    select: (index) => {
+        if (index === undefined) index = App.chaptersIndex;
+        const chapter = App.videoChapters[index];
+        if (!chapter) return;
+
+        const player = el("native-player");
+        if (!player) return;
+
+        player.currentTime = chapter.time;
+        Utils.toast(`Jump to: ${chapter.title}`);
+        Chapters.close();
+    }
+};
+
+// Keyboard Shortcuts Guide Module
+const Shortcuts = {
+    open: () => {
+        const overlay = el("shortcuts-overlay");
+        if (!overlay) return;
+
+        if (!overlay.classList.contains("hidden")) {
+            Shortcuts.close();
+            return;
+        }
+
+        overlay.classList.remove("hidden");
+        App.activeLayer = "SHORTCUTS";
+    },
+    close: () => {
+        el("shortcuts-overlay").classList.add("hidden");
+        App.activeLayer = "NONE";
+    }
+};
+
+// --- 8. PLAYER ---
 const Player = {
     cacheElements: () => {
         App.playerElements = {
@@ -1529,15 +2038,39 @@ const Player = {
                     const data = await res.json();
                     if (!isCurrent()) return;
                     App.currentVideoData = data;
+
+                    // Parse video chapters from description
+                    if (data.description || data.descriptionHtml) {
+                        const desc = data.description || data.descriptionHtml;
+                        App.videoChapters = Chapters.parseChapters(desc);
+                    } else {
+                        App.videoChapters = [];
+                    }
+
+                    // Store available quality options
+                    const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
+                    App.availableQualities = formats.sort((a, b) => (b.height || 0) - (a.height || 0));
+
                     await Player.loadUpNext(data, vId);
                     if (!isCurrent()) return;
                     Player.setupCaptions(data);
-                    const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
+
                     const cappedFormats = Utils.applyResolutionCap(formats);
                     const preferred = Utils.pickPreferredStream(cappedFormats);
                     if (preferred && preferred.url) {
                         streamUrl = preferred.url;
+                        App.currentQuality = preferred;
                         Utils.toast("Src: API");
+                    }
+
+                    // Save video metadata to history for later display
+                    if (data.title && data.author) {
+                        DB.saveVideoToHistory(vId, {
+                            title: data.title,
+                            author: data.author,
+                            authorId: data.authorId,
+                            videoThumbnails: data.videoThumbnails
+                        });
                     }
                 }
             } catch(e) {
@@ -1882,10 +2415,15 @@ const Player = {
         el("enforcement-container").innerHTML = "";
         el("video-info-overlay").classList.add("hidden");
         el("captions-overlay").classList.add("hidden");
+        el("quality-overlay").classList.add("hidden");
+        el("chapters-overlay").classList.add("hidden");
         Comments.reset(); Comments.close();
         Player.stopRenderLoop();
         Player.cleanupEmbedResources();
         App.lastRenderSec = null;
+        App.videoChapters = [];
+        App.availableQualities = [];
+        App.currentQuality = null;
         App.lastRenderDuration = null;
         App.currentStreamUrl = null;
         App.upNext = [];
@@ -1901,19 +2439,47 @@ const Player = {
 // RESTORED (v11.1)
 App.actions = {
     menuSelect: () => {
+        // Hide category tabs and filters when switching views
+        TrendingTabs.hide();
+        SearchFilters.hide();
+
         if(App.menuIdx===0) Feed.loadHome();
-        if(App.menuIdx===1) Feed.renderSubs();
-        if(App.menuIdx===2) { App.focus.area="search"; el("search-input").classList.remove("hidden"); el("search-input").focus(); }
-        if(App.menuIdx===3) { App.view="SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
+        else if(App.menuIdx===1) Feed.renderSubs();
+        else if(App.menuIdx===2) Feed.loadTrendingCategory('');
+        else if(App.menuIdx===3) Feed.renderHistory();
+        else if(App.menuIdx===4) Feed.renderWatchLater();
+        else if(App.menuIdx===5) {
+            App.focus.area="search";
+            el("search-input").classList.remove("hidden");
+            el("search-input").focus();
+            SearchFilters.show();
+            SearchFilters.updateUI();
+        }
+        else if(App.menuIdx===6) { App.view="SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
     },
     runSearch: async () => {
         const input = el("search-input");
         const q = input.value.trim();
         if (!q) return;
-        const result = await Feed.fetch(`/search?q=${encodeURIComponent(q)}`);
+
+        // Build search URL with filters
+        let searchUrl = `/search?q=${encodeURIComponent(q)}`;
+        if (App.searchFilters.sort && App.searchFilters.sort !== 'relevance') {
+            searchUrl += `&sort_by=${App.searchFilters.sort}`;
+        }
+        if (App.searchFilters.date) {
+            searchUrl += `&date=${App.searchFilters.date}`;
+        }
+        if (App.searchFilters.duration) {
+            searchUrl += `&duration=${App.searchFilters.duration}`;
+        }
+        if (App.searchFilters.type && App.searchFilters.type !== 'video') {
+            searchUrl += `&type=${App.searchFilters.type}`;
+        }
+
+        const result = await Feed.fetch(searchUrl);
         if (result && result.ok && result.hasItems) {
             input.blur();
-            input.classList.add("hidden");
             App.focus.area = "grid";
             UI.updateFocus();
         } else {
@@ -2185,16 +2751,19 @@ const Captions = {
 };
 
 const PlayerControls = {
-    ids: ["control-play","control-back","control-forward","control-captions","control-language","control-comments","control-subscribe"],
+    ids: ["control-play","control-back","control-forward","control-quality","control-chapters","control-captions","control-language","control-comments","control-subscribe","control-watchlater"],
     buttons: [],
     actions: {
         "control-play": () => { const p=el("native-player"); if(App.playerMode==="BYPASS") p.paused?p.play():p.pause(); },
         "control-back": () => Player.seek("left"),
         "control-forward": () => Player.seek("right"),
+        "control-quality": () => Quality.open(),
+        "control-chapters": () => Chapters.open(),
         "control-captions": () => Player.toggleCaptions(),
         "control-language": () => Captions.open(),
         "control-comments": () => Comments.open(),
-        "control-subscribe": () => { const i=App.items[App.focus.index]; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); }
+        "control-subscribe": () => { const i=App.currentVideoData; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); },
+        "control-watchlater": () => { const i=App.currentVideoData; if(i) DB.addToWatchLater(i); }
     },
     init: () => {
         PlayerControls.buttons = PlayerControls.ids.map((id, idx) => {
@@ -2242,6 +2811,19 @@ function setupRemote() {
     });
     document.addEventListener('keydown', (e) => {
         if (e.keyCode !== 10009) App.exitCounter = 0;
+
+        // Global Shortcuts Overlay (accessible from anywhere)
+        if (App.activeLayer === "SHORTCUTS") {
+            if (e.keyCode === 13 || e.keyCode === 10009) Shortcuts.close();
+            return;
+        }
+
+        // Help key (191 = ? key, 72 = H key)
+        if ((e.keyCode === 191 || e.keyCode === 72) && e.shiftKey) {
+            Shortcuts.open();
+            return;
+        }
+
         if (App.view === "PLAYER") {
             if (App.activeLayer === "COMMENTS") {
                 if (e.keyCode === 38) Comments.scroll(-1);
@@ -2254,6 +2836,20 @@ function setupRemote() {
                 else if (e.keyCode === 40) Captions.move(1);
                 else if (e.keyCode === 13) Captions.select();
                 else if (e.keyCode === 10009) Captions.close();
+                return;
+            }
+            if (App.activeLayer === "QUALITY") {
+                if (e.keyCode === 38) Quality.move(-1);
+                else if (e.keyCode === 40) Quality.move(1);
+                else if (e.keyCode === 13) Quality.select();
+                else if (e.keyCode === 10009 || e.keyCode === 81) Quality.close(); // 81 = Q
+                return;
+            }
+            if (App.activeLayer === "CHAPTERS") {
+                if (e.keyCode === 38) Chapters.move(-1);
+                else if (e.keyCode === 40) Chapters.move(1);
+                else if (e.keyCode === 13) Chapters.select();
+                else if (e.keyCode === 10009 || e.keyCode === 84) Chapters.close(); // 84 = T
                 return;
             }
             if (App.activeLayer === "INFO") {
@@ -2302,7 +2898,9 @@ function setupRemote() {
                 }
                 case 404: if (App.playerMode === "BYPASS") Player.cycleSpeed(); break;
                 case 405: Comments.open(); break;
-                case 406: const i=App.items[App.focus.index]; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); break;
+                case 406: const i=App.currentVideoData; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); break;
+                case 81: Quality.open(); break; // Q key
+                case 84: Chapters.open(); break; // T key
                 case 457:
                     if(!App.infoKeyTimer) {
                         App.infoKeyHandled=false;
@@ -2323,51 +2921,117 @@ function setupRemote() {
             }
             return;
         }
-        if (App.focus.area === "search") {
-            if (e.keyCode === 13) App.actions.runSearch();
-            else if (e.keyCode === 40) { el("search-input").blur(); App.focus.area = "grid"; UI.updateFocus(); }
-            else if (e.keyCode === 10009) { el("search-input").classList.add("hidden"); App.focus.area = "menu"; UI.updateFocus(); }
+        // Search Filters Navigation
+        if (App.focus.area === "filters") {
+            if (e.keyCode === 37) SearchFilters.moveFocus(-1);
+            else if (e.keyCode === 39) SearchFilters.moveFocus(1);
+            else if (e.keyCode === 13) SearchFilters.activateFocused();
+            else if (e.keyCode === 40) { App.focus.area = "grid"; App.focus.index = 0; UI.updateFocus(); }
+            else if (e.keyCode === 10009) { App.focus.area = "search"; el("search-input").focus(); }
             return;
         }
+
+        // Trending Tabs Navigation
+        if (App.focus.area === "tabs") {
+            if (e.keyCode === 37) TrendingTabs.moveFocus(-1);
+            else if (e.keyCode === 39) TrendingTabs.moveFocus(1);
+            else if (e.keyCode === 13) TrendingTabs.activateFocused();
+            else if (e.keyCode === 40) { App.focus.area = "grid"; App.focus.index = 0; UI.updateFocus(); }
+            else if (e.keyCode === 10009) { App.focus.area = "menu"; UI.updateFocus(); }
+            return;
+        }
+
+        if (App.focus.area === "search") {
+            if (e.keyCode === 13) App.actions.runSearch();
+            else if (e.keyCode === 40) {
+                // Move to filters if visible, otherwise to grid
+                if (!el("search-filters").classList.contains("hidden")) {
+                    App.focus.area = "filters";
+                    App.filterFocusIndex = 0;
+                    SearchFilters.moveFocus(0);
+                } else {
+                    el("search-input").blur();
+                    App.focus.area = "grid";
+                }
+                UI.updateFocus();
+            }
+            else if (e.keyCode === 10009) { el("search-input").classList.add("hidden"); SearchFilters.hide(); App.focus.area = "menu"; UI.updateFocus(); }
+            return;
+        }
+
         switch (e.keyCode) {
-            case 38: 
-                if (App.focus.area === "grid" && App.focus.index >= 4) App.focus.index -= 4;
+            case 38:
+                if (App.focus.area === "grid") {
+                    if (App.focus.index >= 4) {
+                        App.focus.index -= 4;
+                    } else {
+                        // Move to tabs if visible, otherwise to menu
+                        if (!el("trending-tabs").classList.contains("hidden")) {
+                            App.focus.area = "tabs";
+                            App.categoryFocusIndex = 0;
+                            TrendingTabs.moveFocus(0);
+                        } else if (!el("search-filters").classList.contains("hidden")) {
+                            App.focus.area = "filters";
+                            App.filterFocusIndex = 0;
+                            SearchFilters.moveFocus(0);
+                        }
+                    }
+                }
                 else if (App.focus.area === "menu") { App.menuIdx--; if(App.menuIdx<0) App.menuIdx=0; }
                 break;
-            case 40: 
+            case 40:
                 if (App.focus.area === "grid") {
                     const row = Math.floor(App.focus.index/4), total = Math.ceil(App.items.length/4);
                     if (row < total - 1) {
                         const next = App.focus.index + 4;
                         App.focus.index = next < App.items.length ? next : App.items.length - 1;
                     }
-                } else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>3) App.menuIdx=3; }
+                } else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>6) App.menuIdx=6; }
                 break;
-            case 37: 
+            case 37:
                 if (App.focus.area === "grid") {
                     if (App.focus.index % 4 === 0) { App.focus.area = "menu"; el("sidebar").classList.add("expanded"); }
                     else App.focus.index--;
                 }
+                else if (App.focus.area === "tabs") TrendingTabs.moveFocus(-1);
+                else if (App.focus.area === "filters") SearchFilters.moveFocus(-1);
                 break;
-            case 39: 
+            case 39:
                 if (App.focus.area === "menu") { App.focus.area = "grid"; el("sidebar").classList.remove("expanded"); App.focus.index = 0; }
                 else if (App.focus.area === "grid" && App.focus.index < App.items.length - 1) App.focus.index++;
+                else if (App.focus.area === "tabs") TrendingTabs.moveFocus(1);
+                else if (App.focus.area === "filters") SearchFilters.moveFocus(1);
                 break;
-            case 13: 
+            case 13:
                 if (App.focus.area === "menu") App.actions.menuSelect();
-                if (App.focus.area === "grid") {
+                else if (App.focus.area === "grid") {
                     const i = App.items[App.focus.index];
                     if (i.type === "channel") DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i));
+                    else if (i.type === "playlist") Feed.loadPlaylist(i.playlistId, i.title);
                     else Player.start(i);
                 }
+                else if (App.focus.area === "tabs") TrendingTabs.activateFocused();
+                else if (App.focus.area === "filters") SearchFilters.activateFocused();
                 break;
-            case 406: 
+            case 67: // C key - Open channel page
+                if (App.focus.area === "grid") {
+                    const i = App.items[App.focus.index];
+                    if (i && i.authorId) Feed.loadChannel(i.authorId, i.author);
+                }
+                break;
+            case 81: // Q key - Add to Watch Later
+                if (App.focus.area === "grid") {
+                    const i = App.items[App.focus.index];
+                    if (i && i.videoId) DB.addToWatchLater(i);
+                }
+                break;
+            case 406:
                 if (App.focus.area === "grid") {
                     const i = App.items[App.focus.index];
                     if (i.authorId) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i));
                 }
                 break;
-            case 10009: 
+            case 10009:
                 App.exitCounter++;
                 if (App.exitCounter >= 2) { ScreenSaver.restore(); if(typeof tizen!=='undefined') tizen.application.getCurrentApplication().exit(); }
                 else Utils.toast("Back Again to Exit");
@@ -2409,6 +3073,7 @@ window.onload = async () => {
     UI.initLazyObserver();
     Comments.init();
     PlayerControls.init();
+    TrendingTabs.init();
     App.supportsSmoothScroll = !(typeof tizen !== 'undefined' || /tizen/i.test(navigator.userAgent));
     if (typeof tizen !== 'undefined') {
         ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'Return', 'Info'].forEach(k => { try { tizen.tvinputdevice.registerKey(k); } catch (e) {} });
