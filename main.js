@@ -1,20 +1,18 @@
 /**
- * TinyTube Pro v11.0 ("The 2026 Standard")
+ * TinyTube Pro v11.1 ("The Fixer")
  *
- * v11.0 Changes:
- * - STRATEGY: Hardcoded to inv.perditum.com (97% reliability in 2026)
- * - NET: Removed dynamic scanning (instant boot)
- * - WATERFALL: Invidious (Primary) -> Innertube Stealth (Secondary) -> Embed
+ * v11.1 Fixes:
+ * - RESTORED: App.actions (Menu/Search/Settings logic)
+ * - RESTORED: HUD object (Player UI state management)
+ * - RESTORED: ScreenSaver object (Tizen hardware control)
+ * - FIX: Safe access for data.formatStreams in API fallback
  *
- * v10.0 Features (Preserved):
- * - "Stealth" Android Client Emulation (No API Key)
- * - Full Overlay Control & Input Router
+ * v11.0 Strategy (Preserved):
+ * - Perditum Primary -> Innertube Stealth -> Embed
  */
 
 const CONFIG = {
-    // 2026 Ecosystem Analysis: Perditum is the sole reliable survivor.
     PRIMARY_API: "https://inv.perditum.com/api/v1",
-    
     SPONSOR_API: "https://sponsor.ajay.app/api/skipSegments",
     DEARROW_API: "https://dearrow.ajay.app/api/branding",
     TIMEOUT: 8000,
@@ -22,8 +20,6 @@ const CONFIG = {
     SEEK_ACCELERATION_DELAY: 500,
     SEEK_INTERVALS: [10, 30, 60],
     WATCH_HISTORY_LIMIT: 50,
-    
-    // Android Client Constants (Stealth Mode)
     CLIENT_NAME: "ANDROID",
     CLIENT_VERSION: "20.51.39",
     SDK_VERSION: 35,
@@ -53,7 +49,7 @@ LRUCache.prototype.has = function(key) { return this.map.has(key); };
 
 const App = {
     view: "BROWSE",
-    api: CONFIG.PRIMARY_API, // Default to Perditum
+    api: CONFIG.PRIMARY_API,
     items: [],
     focus: { area: "menu", index: 0 },
     menuIdx: 0,
@@ -83,9 +79,9 @@ const App = {
     seekKeyHeld: null,
     seekKeyTime: 0,
     seekRepeatCount: 0,
+    hudTimer: null,
     
     playerElements: null,
-    screenSaverState: null,
     watchHistory: null,
     
     activeLayer: "NONE",
@@ -201,7 +197,7 @@ const Utils = {
     clamp: (val, min, max) => Math.max(min, Math.min(max, val))
 };
 
-// --- 2. EXTRACTOR (INNERTUBE STEALTH v10.0) ---
+// --- 2. EXTRACTOR (INNERTUBE STEALTH) ---
 const Extractor = {
     extractInnertube: async (videoId) => {
         try {
@@ -222,15 +218,12 @@ const Extractor = {
                 racyCheckOkay: true
             };
 
-            // Stealth: No API Key
-            const url = "https://www.youtube.com/youtubei/v1/player";
-
-            const res = await Utils.fetchWithTimeout(url, {
+            const res = await Utils.fetchWithTimeout("https://www.youtube.com/youtubei/v1/player", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "User-Agent": CONFIG.USER_AGENT,
-                    "X-YouTube-Client-Name": "3", // 3 = ANDROID
+                    "X-YouTube-Client-Name": "3",
                     "X-YouTube-Client-Version": CONFIG.CLIENT_VERSION,
                     "Origin": "https://www.youtube.com",
                     "Referer": "https://www.youtube.com",
@@ -357,7 +350,7 @@ const DB = {
     }
 };
 
-// --- 4. NETWORK (Simplifed v11.0) ---
+// --- 4. NETWORK ---
 const Network = {
     connect: async () => {
         const custom = localStorage.getItem("customBase");
@@ -579,7 +572,7 @@ const UI = {
     }
 };
 
-// --- 7. PLAYER (v11.0 WATERFALL) ---
+// --- 7. PLAYER ---
 const Player = {
     cacheElements: () => {
         App.playerElements = {
@@ -705,7 +698,6 @@ const Player = {
 
         App.playerElements.bufferingSpinner.classList.remove("hidden");
 
-        // SponsorBlock
         App.sponsorSegs = [];
         Utils.fetchWithTimeout(`${CONFIG.SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo"]`, {}, 5000)
             .then(r=>r.json()).then(s => { if(Array.isArray(s)) App.sponsorSegs=s.sort((a,b)=>a.segment[0]-b.segment[0]); })
@@ -713,7 +705,6 @@ const Player = {
 
         let streamUrl = null;
 
-        // STAGE 1: INVIDIOUS API (Primary - Perditum is Reliable)
         if (!streamUrl && App.api) {
             try {
                 const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`);
@@ -722,7 +713,9 @@ const Player = {
                     const data = await res.json();
                     App.currentVideoData = data;
                     Player.setupCaptions(data);
-                    const format = data.formatStreams.find(s=>s.qualityLabel==="1080p"||s.container==="mp4") || data.formatStreams[0];
+                    
+                    // SAFETY GUARD (v11.1)
+                    const format = (data.formatStreams || []).find(s=>s.qualityLabel==="1080p"||s.container==="mp4") || (data.formatStreams || [])[0];
                     if(format) {
                         streamUrl = format.url;
                         Utils.toast("Src: API");
@@ -731,7 +724,6 @@ const Player = {
             } catch(e) { console.log("API failed"); }
         }
 
-        // STAGE 2: INNERTUBE STEALTH (Secondary - Experimental Backup)
         if (!streamUrl) {
             try {
                 const direct = await Extractor.extractInnertube(vId);
@@ -745,7 +737,6 @@ const Player = {
             } catch(e) { console.log("Innertube failed"); }
         }
 
-        // STAGE 3: EMBED (Fallback)
         if (streamUrl) {
             p.src = streamUrl;
             p.style.display = "block";
@@ -864,6 +855,77 @@ const Player = {
 };
 
 // --- 8. CONTROLLERS ---
+// RESTORED (v11.1)
+App.actions = {
+    menuSelect: () => {
+        if(App.menuIdx===0) Feed.loadHome();
+        if(App.menuIdx===1) Feed.renderSubs();
+        if(App.menuIdx===2) { App.focus.area="search"; el("search-input").classList.remove("hidden"); el("search-input").focus(); }
+        if(App.menuIdx===3) { App.view="SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
+    },
+    runSearch: () => {
+        const q = el("search-input").value;
+        el("search-input").blur();
+        el("search-input").classList.add("hidden");
+        Feed.fetch(`/search?q=${encodeURIComponent(q)}`);
+    },
+    saveSettings: () => {
+        const name = el("profile-name-input").value.trim();
+        const api = el("api-input").value.trim();
+        if(name) DB.saveProfileName(name);
+        if(api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
+        else localStorage.removeItem("customBase");
+        location.reload();
+    }
+};
+
+// RESTORED (v11.1)
+const HUD = {
+    show: () => {
+        el("player-hud").classList.add("visible");
+        if(App.hudTimer) clearTimeout(App.hudTimer);
+        App.hudTimer = setTimeout(() => el("player-hud").classList.remove("visible"), 4000);
+    },
+    updateSubBadge: (isSubbed) => {
+        const b = el("sub-badge");
+        if(b) {
+            b.className = isSubbed ? "badge active" : "badge";
+            b.textContent = isSubbed ? "SUBSCRIBED" : "SUBSCRIBE";
+        }
+    },
+    updateSpeedBadge: (speed) => {
+        const b = el("speed-badge");
+        if(b) b.textContent = `${speed}x`;
+    },
+    refreshPinned: () => {
+        const overlayOpen = App.activeLayer !== "NONE" && App.activeLayer !== "CONTROLS";
+        if(overlayOpen) {
+            el("player-hud").classList.add("visible");
+            if(App.hudTimer) clearTimeout(App.hudTimer);
+        } else {
+            HUD.show();
+        }
+    }
+};
+
+// RESTORED (v11.1)
+const ScreenSaver = {
+    disable: () => {
+        if (window.webapis && window.webapis.appcommon) {
+            webapis.appcommon.setScreenSaver(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_OFF);
+        }
+    },
+    restore: () => {
+        if (window.webapis && window.webapis.appcommon) {
+            webapis.appcommon.setScreenSaver(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_ON);
+        }
+    },
+    defaultState: () => {
+        return window.webapis && window.webapis.appcommon ? 
+            webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_ON : null;
+    }
+};
+
 const Comments = {
     state: { open: false, loading: false, nextPage: null, page: 1, videoId: null },
     elements: null,
