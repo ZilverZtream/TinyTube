@@ -18,6 +18,38 @@ const CardPool = {
     },
     release: function(element) {
         if (!element) return;
+        const activeElement = document.activeElement;
+        if (activeElement && (activeElement === element || element.contains(activeElement))) {
+            const grid = el("grid-container");
+            let fallback = null;
+            if (grid) {
+                fallback = element.nextElementSibling || element.previousElementSibling;
+                if (!fallback || !fallback.matches('.video-card, .channel-card')) {
+                    fallback = grid.querySelector('.video-card, .channel-card');
+                }
+            }
+
+            if (fallback) {
+                const idParts = fallback.id ? fallback.id.split('-') : [];
+                const idx = parseInt(idParts[1], 10);
+                TinyTube.App.focus.area = "grid";
+                TinyTube.App.focus.index = Number.isNaN(idx) ? 0 : idx;
+                if (typeof fallback.focus === "function") {
+                    fallback.focus();
+                }
+                UI.updateFocus();
+            } else {
+                const menuHome = el("menu-home");
+                if (menuHome) {
+                    TinyTube.App.focus.area = "menu";
+                    TinyTube.App.menuIdx = 0;
+                    if (typeof menuHome.focus === "function") {
+                        menuHome.focus();
+                    }
+                    UI.updateFocus();
+                }
+            }
+        }
         if (element.parentNode) {
             element.parentNode.removeChild(element);
         }
@@ -207,7 +239,12 @@ const UI = {
     // FIX: Named function to prevent closure memory leaks
     handleImgError: (e) => {
         const img = e.target;
-        img.onerror = null;
+        if (img.dataset.fallback === "1") {
+            img.onerror = null;
+            img.style.display = "none";
+            return;
+        }
+        img.dataset.fallback = "1";
         img.src = "icon.png";
     },
     renderGrid: (data) => {
