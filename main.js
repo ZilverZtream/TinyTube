@@ -120,7 +120,10 @@ const App = {
     watchHistory: null,
 
     activeLayer: "NONE",
-    playerControls: { active: false, index: 0 }
+    playerControls: { active: false, index: 0 },
+
+    embedMessageHandler: null,
+    embedTimeout: null
 };
 
 const el = (id) => {
@@ -140,14 +143,61 @@ const SafeStorage = {
         } catch (e) {
             if (e.name === CONFIG.LOCALSTORAGE_QUOTA_EXCEEDED || e.name === 'QuotaExceededError') {
                 console.log(`localStorage quota exceeded for key: ${key}`);
-                // Try to clear old cache entries
-                try {
-                    const oldCipherKey = CONFIG.CIPHER_CACHE_KEY;
-                    if (key !== oldCipherKey) localStorage.removeItem(oldCipherKey);
-                } catch (cleanupError) {}
+                // Implement LRU eviction strategy
+                if (SafeStorage.freeUpSpace(key)) {
+                    // Retry after cleanup
+                    try {
+                        localStorage.setItem(key, value);
+                        return true;
+                    } catch (retryError) {
+                        console.log(`localStorage quota still exceeded after cleanup`);
+                        Utils.toast("Storage full - data may not save");
+                    }
+                }
             } else {
                 console.log(`localStorage error: ${e.message}`);
             }
+            return false;
+        }
+    },
+    freeUpSpace: (currentKey) => {
+        try {
+            let freed = false;
+
+            // 1. Clear cipher cache if not the current key
+            const cipherKey = CONFIG.CIPHER_CACHE_KEY;
+            if (currentKey !== cipherKey && localStorage.getItem(cipherKey)) {
+                localStorage.removeItem(cipherKey);
+                console.log('Cleared cipher cache');
+                freed = true;
+            }
+
+            // 2. Clear oldest history entries (keep only last 25 instead of 50)
+            for (let pid = 0; pid < 3; pid++) {
+                const historyKey = `tt_history_${pid}`;
+                if (currentKey === historyKey) continue;
+
+                const historyData = Utils.safeParse(localStorage.getItem(historyKey), {});
+                const entries = Object.entries(historyData);
+                if (entries.length > 25) {
+                    // Sort by timestamp and keep only newest 25
+                    entries.sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+                    const trimmed = Object.fromEntries(entries.slice(0, 25));
+                    localStorage.setItem(historyKey, JSON.stringify(trimmed));
+                    console.log(`Trimmed history for profile ${pid}: ${entries.length} -> 25`);
+                    freed = true;
+                }
+            }
+
+            // 3. Clear DeArrow cache (in-memory, but reset it)
+            if (App.deArrowCache && App.deArrowCache.map) {
+                App.deArrowCache.map.clear();
+                console.log('Cleared DeArrow cache');
+            }
+
+            return freed;
+        } catch (cleanupError) {
+            console.log(`Cleanup error: ${cleanupError.message}`);
             return false;
         }
     },
@@ -1038,6 +1088,11 @@ const Player = {
     start: async (item, retryCount = 0) => {
         if (!item) return;
 
+        // Disconnect lazy observer when entering player
+        if (App.lazyObserver) {
+            App.lazyObserver.disconnect();
+        }
+
         // Abort any previous video load operations
         if (App.currentVideoAbortController) {
             App.currentVideoAbortController.abort();
@@ -1166,12 +1221,16 @@ const Player = {
         p.style.display = "none";
         p.pause();
         Player.stopRenderLoop();
+
+        // Clean up any existing embed listeners/timeouts
+        Player.cleanupEmbedResources();
+
         try {
             const container = el("enforcement-container");
             container.innerHTML = `<iframe id="embed-iframe" src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
 
             // Add timeout to detect if embed fails to load
-            const embedTimeout = setTimeout(() => {
+            App.embedTimeout = setTimeout(() => {
                 // Check if we're still in enforce mode and if iframe hasn't loaded properly
                 if (App.playerMode === "ENFORCE" && App.currentVideoId === vId) {
                     const iframe = container.querySelector('#embed-iframe');
@@ -1179,30 +1238,44 @@ const Player = {
                         Player.showError("Embed Failed", "Unable to load embedded player. Video may be restricted.");
                     }
                 }
+                App.embedTimeout = null;
             }, 10000); // 10 second timeout
 
             // Listen for messages from iframe to confirm it loaded
-            const messageHandler = (event) => {
-                if (event.origin === "https://www.youtube.com" && embedTimeout) {
-                    clearTimeout(embedTimeout);
-                    window.removeEventListener('message', messageHandler);
+            App.embedMessageHandler = (event) => {
+                if (event.origin === "https://www.youtube.com") {
+                    Player.cleanupEmbedResources();
                 }
             };
-            window.addEventListener('message', messageHandler);
+            window.addEventListener('message', App.embedMessageHandler);
 
             Utils.toast("Src: Embed");
         } catch (e) {
             Player.showError("Playback Failed", "All methods failed.");
         }
     },
+    cleanupEmbedResources: () => {
+        if (App.embedTimeout) {
+            clearTimeout(App.embedTimeout);
+            App.embedTimeout = null;
+        }
+        if (App.embedMessageHandler) {
+            window.removeEventListener('message', App.embedMessageHandler);
+            App.embedMessageHandler = null;
+        }
+    },
     showError: (title, msg) => {
         el("enforcement-container").innerHTML = `<div class="player-error"><h3>${title}</h3><p>${msg}</p></div>`;
-        App.playerElements.bufferingSpinner.classList.add("hidden");
+        if (App.playerElements && App.playerElements.bufferingSpinner) {
+            App.playerElements.bufferingSpinner.classList.add("hidden");
+        }
     },
     setupHUD: (p) => {
         const show = () => HUD.show();
         p.onplay = () => {
-            App.playerElements.bufferingSpinner.classList.add("hidden");
+            if (App.playerElements && App.playerElements.bufferingSpinner) {
+                App.playerElements.bufferingSpinner.classList.add("hidden");
+            }
             show();
             if (!App.renderTimer && !App.renderAnimationFrame && App.playerMode === "BYPASS") Player.startRenderLoop();
         };
@@ -1211,8 +1284,16 @@ const Player = {
             Player.stopRenderLoop();
         };
         p.onseeked = show;
-        p.onwaiting = () => App.playerElements.bufferingSpinner.classList.remove("hidden");
-        p.onplaying = () => App.playerElements.bufferingSpinner.classList.add("hidden");
+        p.onwaiting = () => {
+            if (App.playerElements && App.playerElements.bufferingSpinner) {
+                App.playerElements.bufferingSpinner.classList.remove("hidden");
+            }
+        };
+        p.onplaying = () => {
+            if (App.playerElements && App.playerElements.bufferingSpinner) {
+                App.playerElements.bufferingSpinner.classList.add("hidden");
+            }
+        };
         p.onerror = () => {
             App.playerErrorRetries++;
             if (App.playerErrorRetries < CONFIG.MAX_PLAYER_ERROR_RETRIES) {
@@ -1248,13 +1329,15 @@ const Player = {
         App.renderAnimationFrame = null;
     },
     updateHud: (p, forceTextUpdate = false) => {
+        if (!App.playerElements) return;
+
         const currentSec = Math.floor(p.currentTime);
         const duration = p.duration;
         const pe = App.playerElements;
         const hasFiniteDuration = isFinite(duration) && duration > 0;
 
         // Always update progress bar for smooth animation
-        if (hasFiniteDuration) {
+        if (hasFiniteDuration && pe.progressFill) {
             pe.progressFill.style.transform = `scaleX(${p.currentTime / duration})`;
         }
 
@@ -1262,20 +1345,20 @@ const Player = {
         if (forceTextUpdate || currentSec !== App.lastRenderSec || duration !== App.lastRenderDuration) {
             App.lastRenderSec = currentSec;
             App.lastRenderDuration = duration;
-            pe.currTime.textContent = Utils.formatTime(p.currentTime);
-            pe.totalTime.textContent = Utils.formatTime(duration);
-            if (hasFiniteDuration && p.buffered.length > 0) {
+            if (pe.currTime) pe.currTime.textContent = Utils.formatTime(p.currentTime);
+            if (pe.totalTime) pe.totalTime.textContent = Utils.formatTime(duration);
+            if (hasFiniteDuration && p.buffered.length > 0 && pe.bufferFill) {
                 pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / duration})`;
             }
         }
     },
     renderLoopRAF: () => {
-        if (App.view !== "PLAYER") {
+        if (App.view !== "PLAYER" || !App.playerElements) {
             Player.stopRenderLoop();
             return;
         }
         const p = App.playerElements.player;
-        if (App.playerMode === "ENFORCE" || p.paused) {
+        if (!p || App.playerMode === "ENFORCE" || p.paused) {
             Player.stopRenderLoop();
             return;
         }
@@ -1291,12 +1374,12 @@ const Player = {
         App.renderAnimationFrame = requestAnimationFrame(Player.renderLoopRAF);
     },
     renderLoop: () => {
-        if (App.view !== "PLAYER") {
+        if (App.view !== "PLAYER" || !App.playerElements) {
             Player.stopRenderLoop();
             return;
         }
         const p = App.playerElements.player;
-        if (App.playerMode === "ENFORCE" || p.paused) {
+        if (!p || App.playerMode === "ENFORCE" || p.paused) {
             Player.stopRenderLoop();
             return;
         }
@@ -1312,6 +1395,7 @@ const Player = {
         App.renderTimer = setTimeout(Player.renderLoop, CONFIG.RENDER_INTERVAL_MS);
     },
     seek: (direction, accelerated = false) => {
+        if (!App.playerElements || !App.playerElements.player) return;
         const p = App.playerElements.player;
         if (App.playerMode !== "BYPASS" || isNaN(p.duration)) return;
         let amount = CONFIG.SEEK_INTERVALS[0];
@@ -1324,6 +1408,7 @@ const Player = {
         p.currentTime = Utils.clamp(newTime, 0, p.duration);
     },
     cycleSpeed: () => {
+        if (!App.playerElements || !App.playerElements.player) return;
         const p = App.playerElements.player;
         App.playbackSpeedIdx = (App.playbackSpeedIdx + 1) % CONFIG.SPEEDS.length;
         const s = CONFIG.SPEEDS[App.playbackSpeedIdx];
@@ -1368,6 +1453,7 @@ const Player = {
         el("captions-overlay").classList.add("hidden");
         Comments.reset(); Comments.close();
         Player.stopRenderLoop();
+        Player.cleanupEmbedResources();
         App.lastRenderSec = null;
         App.lastRenderDuration = null;
         App.currentStreamUrl = null;
@@ -1412,13 +1498,42 @@ App.actions = {
         if(api && Utils.isValidUrl(api)) SafeStorage.setItem("customBase", api);
         else SafeStorage.removeItem("customBase");
         if (maxRes) SafeStorage.setItem("tt_max_res", maxRes);
+        const oldAutoplay = App.autoplayEnabled;
+        App.autoplayEnabled = autoplayEnabled;
         SafeStorage.setItem("tt_autoplay", autoplayEnabled ? "true" : "false");
-        location.reload();
+
+        // Reload data instead of full page reload
+        el("settings-overlay").classList.add("hidden");
+        App.view = "BROWSE";
+
+        // Clear caches
+        App.deArrowCache.map.clear();
+        App.streamCache.map.clear();
+        App.subsCache = null;
+        App.subsCacheId = null;
+
+        // Reconnect to API and reload feed
+        Network.connect();
+        Utils.toast("Settings saved");
     },
     switchProfile: () => {
         App.profileId = (App.profileId + 1) % 3;
         SafeStorage.setItem("tt_pid", App.profileId.toString());
+
+        // Clear caches before loading new profile
+        App.deArrowCache.map.clear();
+        App.streamCache.map.clear();
+        App.subsCache = null;
+        App.subsCacheId = null;
+
         DB.loadProfile();
+
+        // Reload feed for new profile
+        if (App.view === "BROWSE") {
+            if (App.menuIdx === 0) Feed.loadHome();
+            else if (App.menuIdx === 1) Feed.renderSubs();
+        }
+
         Utils.toast("Switched to Profile #" + (App.profileId + 1));
     }
 };
@@ -1544,13 +1659,22 @@ const Comments = {
     toggle: () => Comments.isOpen() ? Comments.close() : Comments.open(),
     loadPage: async () => {
         if(Comments.state.loading) return;
+        const requestedVideoId = App.currentVideoId;
         Comments.state.loading = true;
         Comments.elements.footer.classList.remove("hidden");
         try {
-            const u = `${App.api}/comments/${App.currentVideoId}${Comments.state.nextPage ? "?continuation="+Comments.state.nextPage : ""}`;
+            const u = `${App.api}/comments/${requestedVideoId}${Comments.state.nextPage ? "?continuation="+Comments.state.nextPage : ""}`;
             const res = await Utils.fetchWithTimeout(u);
             if(!res.ok) throw new Error("HTTP " + res.status);
             const data = await res.json();
+
+            // Check if we're still on the same video
+            if(Comments.state.videoId !== requestedVideoId) {
+                console.log("Comments load cancelled: video changed");
+                Comments.state.loading = false;
+                return;
+            }
+
             if(data.comments) {
                 if(Comments.state.page===1) {
                     Comments.elements.list.textContent = "";
@@ -1571,7 +1695,11 @@ const Comments = {
             }
             Comments.state.nextPage = data.continuation;
             Comments.state.page++;
-        } catch(e) { Comments.elements.list.textContent = "Error loading comments."; }
+        } catch(e) {
+            if(Comments.state.videoId === requestedVideoId) {
+                Comments.elements.list.textContent = "Error loading comments.";
+            }
+        }
         Comments.state.loading = false;
         if(!Comments.state.nextPage) Comments.elements.footer.classList.add("hidden");
     },
@@ -1608,8 +1736,16 @@ const Captions = {
         Captions.buttons.forEach(function(b, i) {
             if(i === Captions.index) {
                 b.classList.add("focused");
-                try { b.scrollIntoView({block:"center"}); }
-                catch(e) { b.scrollIntoView(false); }
+                try {
+                    if (App.supportsSmoothScroll) {
+                        b.scrollIntoView({block:"center", behavior:"smooth"});
+                    } else {
+                        b.scrollIntoView({block:"center"});
+                    }
+                } catch(e) {
+                    App.supportsSmoothScroll = false;
+                    b.scrollIntoView(false);
+                }
             }
             else b.classList.remove("focused");
         });
@@ -1827,7 +1963,7 @@ window.onload = async () => {
         try { App.screenSaverState = webapis.appcommon.getScreenSaver(); } catch(e){}
         ScreenSaver.disable();
     }
-    
+
     el("backend-status").textContent = "Init...";
     setupRemote();
     DB.loadProfile();
@@ -1837,8 +1973,16 @@ window.onload = async () => {
     el("backend-status").textContent = "Breaking Cipher...";
     const freshCipher = await CipherBreaker.run();
     CONFIG.CIPHER_SEQUENCE = freshCipher;
-    
+
     // 2. Connect
     el("backend-status").textContent = "Connecting...";
     await Network.connect();
+};
+
+// --- CLEANUP ON EXIT ---
+window.onbeforeunload = () => {
+    if (App.lazyObserver) {
+        App.lazyObserver.disconnect();
+    }
+    Player.cleanupEmbedResources();
 };
