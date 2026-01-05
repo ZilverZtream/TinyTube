@@ -506,6 +506,48 @@ iframe {
     border-color: transparent;
 }
 
+#up-next {
+    margin-top: 18px;
+    max-width: 520px;
+    background: rgba(0,0,0,0.72);
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.up-next-header {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #777;
+    margin-bottom: 10px;
+}
+#up-next-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.up-next-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.up-next-item.is-next .up-next-title {
+    color: #ffdddd;
+}
+.up-next-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #f5f5f5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.up-next-meta {
+    font-size: 12px;
+    color: #9a9a9a;
+}
+
 /* PLAYER CONTROLS */
 #player-controls {
     position: absolute;
@@ -877,6 +919,16 @@ iframe {
 .setting-group .row {
     display: flex;
     align-items: center;
+}
+.setting-group .toggle-row {
+    gap: 12px;
+    font-size: 14px;
+    color: #aaa;
+}
+.setting-group .toggle-row input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    accent-color: #ff3333;
 }
 .modal input,
 .modal select {

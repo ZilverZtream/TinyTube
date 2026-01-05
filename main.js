@@ -82,6 +82,8 @@ const App = {
     currentVideoId: null,
     currentVideoData: null,
     currentStreamUrl: null,
+    upNext: [],
+    autoplayEnabled: false,
     playbackSpeedIdx: 0,
     captionTracks: [],
     infoKeyTimer: null,
@@ -514,6 +516,8 @@ const DB = {
         el("profile-name-input").value = names[App.profileId];
         el("api-input").value = localStorage.getItem("customBase") || "";
         el("max-res-select").value = Utils.getPreferredMaxResolution().toString();
+        App.autoplayEnabled = localStorage.getItem("tt_autoplay") === "true";
+        el("autoplay-toggle").checked = App.autoplayEnabled;
         App.subsCache = null;
         App.subsCacheId = null;
         App.watchHistory = Utils.safeParse(localStorage.getItem(`tt_history_${App.profileId}`), {});
@@ -900,6 +904,31 @@ const Player = {
             }
         }
     },
+    normalizeUpNextItem: (item) => {
+        const videoId = Utils.getVideoId(item);
+        if (!videoId || videoId === App.currentVideoId) return null;
+        return {
+            videoId,
+            title: item.title || item.titleText || "Untitled",
+            author: item.author || item.authorName || "",
+            lengthSeconds: item.lengthSeconds || item.length || item.duration || 0,
+            videoThumbnails: item.videoThumbnails || item.thumbnails || item.thumbnail || []
+        };
+    },
+    loadUpNext: async (data, vId) => {
+        let list = Array.isArray(data && data.recommendedVideos) ? data.recommendedVideos : [];
+        if (!list.length && App.api) {
+            try {
+                const res = await Utils.fetchWithTimeout(`${App.api}/related/${vId}`);
+                if (res.ok) {
+                    const related = await res.json();
+                    if (Array.isArray(related)) list = related;
+                }
+            } catch {}
+        }
+        App.upNext = (list || []).map(Player.normalizeUpNextItem).filter(Boolean);
+        HUD.renderUpNext();
+    },
     
     start: async (item, retryCount = 0) => {
         if (!item) return;
@@ -912,6 +941,7 @@ const Player = {
         App.currentVideoData = null;
         App.currentStreamUrl = null;
         App.lastRenderSec = null;
+        App.upNext = [];
         
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
@@ -924,6 +954,7 @@ const Player = {
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
         HUD.updateSpeedBadge(1);
+        HUD.renderUpNext();
         el("video-info-overlay").classList.add("hidden");
         el("captions-overlay").classList.add("hidden");
         el("enforcement-container").innerHTML = ""; // Clear
@@ -952,6 +983,7 @@ const Player = {
                     const data = await res.json();
                     if (!isCurrent()) return;
                     App.currentVideoData = data;
+                    await Player.loadUpNext(data, vId);
                     Player.setupCaptions(data);
                     const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
                     const cappedFormats = Utils.applyResolutionCap(formats);
@@ -975,6 +1007,10 @@ const Player = {
                     Utils.toast("Src: Direct");
                 }
             } catch(e) { console.log("Innertube failed"); }
+        }
+
+        if (!App.upNext.length) {
+            await Player.loadUpNext(null, vId);
         }
         
         if (streamUrl) {
@@ -1029,6 +1065,11 @@ const Player = {
         p.onwaiting = () => App.playerElements.bufferingSpinner.classList.remove("hidden");
         p.onplaying = () => App.playerElements.bufferingSpinner.classList.add("hidden");
         p.onerror = () => Player.enforce(App.currentVideoId);
+        p.onended = () => {
+            if (!App.autoplayEnabled) return;
+            const next = App.upNext && App.upNext[0];
+            if (next) Player.start(next);
+        };
     },
     startRenderLoop: () => {
         Player.stopRenderLoop();
@@ -1138,6 +1179,8 @@ const Player = {
         App.lastRenderSec = null;
         App.lastRenderDuration = null;
         App.currentStreamUrl = null;
+        App.upNext = [];
+        HUD.renderUpNext();
         Player.clearCaptions();
         ScreenSaver.restore();
     }
@@ -1170,10 +1213,12 @@ App.actions = {
         const name = el("profile-name-input").value.trim();
         const api = el("api-input").value.trim();
         const maxRes = el("max-res-select").value;
+        const autoplayEnabled = el("autoplay-toggle").checked;
         if(name) DB.saveProfileName(name);
         if(api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
         else localStorage.removeItem("customBase");
         if (maxRes) localStorage.setItem("tt_max_res", maxRes);
+        localStorage.setItem("tt_autoplay", autoplayEnabled ? "true" : "false");
         location.reload();
     },
     switchProfile: () => {
@@ -1205,6 +1250,28 @@ const HUD = {
             if(speed === 1) b.classList.add("hidden");
             else b.classList.remove("hidden");
         }
+    },
+    renderUpNext: () => {
+        const container = el("up-next");
+        const list = el("up-next-list");
+        if (!container || !list) return;
+        list.textContent = "";
+        const items = App.upNext || [];
+        if (!items.length) {
+            container.classList.add("hidden");
+            return;
+        }
+        container.classList.remove("hidden");
+        items.slice(0, 5).forEach((item, idx) => {
+            const row = Utils.create("div", "up-next-item");
+            if (idx === 0) row.classList.add("is-next");
+            row.appendChild(Utils.create("div", "up-next-title", item.title || "Untitled"));
+            const metaText = [item.author, item.lengthSeconds ? Utils.formatTime(item.lengthSeconds) : ""]
+                .filter(Boolean)
+                .join(" • ");
+            row.appendChild(Utils.create("div", "up-next-meta", metaText));
+            list.appendChild(row);
+        });
     },
     refreshPinned: () => {
         const overlayOpen = App.activeLayer !== "NONE" && App.activeLayer !== "CONTROLS";
