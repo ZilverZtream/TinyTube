@@ -745,6 +745,7 @@ const Player = {
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
         HUD.updateSpeedBadge(1);
         el("video-info-overlay").classList.add("hidden");
+        Comments.reset();
         Player.clearCaptions();
 
         // Get thumbnail for poster
@@ -990,6 +991,7 @@ const Player = {
         if (isVisible) {
             overlay.classList.add("hidden");
         } else {
+            if (Comments.isOpen()) Comments.close();
             // Populate info
             const data = App.currentVideoData;
             if (data) {
@@ -1022,6 +1024,8 @@ const Player = {
         el("progress-fill").style.transform = "scaleX(0)";
         el("buffer-fill").style.transform = "scaleX(0)";
         el("video-info-overlay").classList.add("hidden");
+        Comments.reset();
+        Comments.close();
         if (App.playerElements) {
             App.playerElements.bufferingSpinner.classList.add("hidden");
         }
@@ -1033,6 +1037,157 @@ const Player = {
         App.currentVideoData = null;
         App.seekKeyHeld = null;
         Player.clearCaptions();
+    }
+};
+
+// --- 6. COMMENTS ---
+const Comments = {
+    state: {
+        open: false,
+        loading: false,
+        nextPage: null,
+        page: 1,
+        count: 0,
+        videoId: null
+    },
+    elements: null,
+    cacheElements: () => {
+        Comments.elements = {
+            overlay: el("comments-overlay"),
+            list: el("comments-list"),
+            footer: el("comments-footer"),
+            count: el("comments-count"),
+            page: el("comments-page")
+        };
+    },
+    init: () => {
+        if (!Comments.elements) Comments.cacheElements();
+        Comments.reset();
+    },
+    isOpen: () => Comments.state.open,
+    reset: () => {
+        if (!Comments.elements) Comments.cacheElements();
+        Comments.state.open = false;
+        Comments.state.loading = false;
+        Comments.state.nextPage = null;
+        Comments.state.page = 1;
+        Comments.state.count = 0;
+        Comments.state.videoId = null;
+        Comments.elements.list.textContent = "";
+        Comments.elements.footer.classList.add("hidden");
+        Comments.elements.count.textContent = "0 comments";
+        Comments.elements.page.textContent = "Page 1";
+    },
+    open: async () => {
+        if (!App.currentVideoId || !App.api) return;
+        if (!Comments.elements) Comments.cacheElements();
+        Comments.state.open = true;
+        Comments.elements.overlay.classList.remove("hidden");
+        el("video-info-overlay").classList.add("hidden");
+
+        if (Comments.state.videoId !== App.currentVideoId) {
+            Comments.reset();
+            Comments.state.open = true;
+            Comments.elements.overlay.classList.remove("hidden");
+            Comments.elements.list.textContent = "Loading comments...";
+            await Comments.loadPage();
+        }
+    },
+    close: () => {
+        if (!Comments.elements) Comments.cacheElements();
+        Comments.state.open = false;
+        Comments.elements.overlay.classList.add("hidden");
+    },
+    toggle: () => {
+        if (Comments.isOpen()) {
+            Comments.close();
+        } else {
+            Comments.open();
+        }
+    },
+    sanitizeText: (text) => {
+        if (!text) return "";
+        return text.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    },
+    loadPage: async () => {
+        if (Comments.state.loading || !App.currentVideoId || !App.api) return;
+        Comments.state.loading = true;
+        Comments.elements.footer.classList.remove("hidden");
+
+        const vId = App.currentVideoId;
+        const params = [];
+        if (Comments.state.nextPage) {
+            params.push(`continuation=${encodeURIComponent(Comments.state.nextPage)}`);
+        }
+        const url = `${App.api}/comments/${vId}${params.length ? "?" + params.join("&") : ""}`;
+
+        try {
+            const res = await Utils.fetchWithTimeout(url, {}, 8000);
+            if (!res.ok) throw new Error("Comments fetch failed");
+            const data = await res.json();
+            if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
+
+            const comments = data.comments || [];
+            if (Comments.state.page === 1 && comments.length === 0) {
+                Comments.elements.list.textContent = "No comments yet.";
+            } else {
+                Comments.render(comments);
+            }
+
+            if (data.commentCount) {
+                Comments.state.count = data.commentCount;
+                Comments.elements.count.textContent = `${data.commentCount} comments`;
+            } else if (!Comments.state.count) {
+                Comments.state.count = Comments.elements.list.children.length;
+                Comments.elements.count.textContent = `${Comments.state.count} comments`;
+            }
+
+            Comments.state.nextPage = data.continuation || data.nextpage || null;
+            Comments.state.videoId = vId;
+            Comments.elements.page.textContent = `Page ${Comments.state.page}`;
+            Comments.state.page += 1;
+        } catch (e) {
+            if (Comments.state.page === 1) {
+                Comments.elements.list.textContent = "Unable to load comments.";
+            }
+        } finally {
+            Comments.state.loading = false;
+            if (!Comments.state.nextPage) {
+                Comments.elements.footer.classList.add("hidden");
+            } else {
+                Comments.elements.footer.textContent = "Loading more...";
+                Comments.elements.footer.classList.remove("hidden");
+            }
+        }
+    },
+    render: (items) => {
+        if (!items || items.length === 0) return;
+        if (Comments.elements.list.textContent === "Loading comments...") {
+            Comments.elements.list.textContent = "";
+        }
+        items.forEach((item) => {
+            const row = Utils.create("div", "comment-item");
+            const author = Utils.create("div", "comment-author", item.author || "Unknown");
+            const metaText = [];
+            if (item.published) metaText.push(Utils.formatDate(item.published));
+            if (item.likeCount) metaText.push(`${item.likeCount} likes`);
+            const meta = Utils.create("div", "comment-meta", metaText.join(" • "));
+            const content = Utils.create("div", "comment-text", Comments.sanitizeText(item.content || item.contentHtml || ""));
+            row.appendChild(author);
+            if (meta.textContent) row.appendChild(meta);
+            row.appendChild(content);
+            Comments.elements.list.appendChild(row);
+        });
+    },
+    scroll: (direction) => {
+        if (!Comments.isOpen()) return;
+        const list = Comments.elements.list;
+        const delta = 140 * direction;
+        list.scrollTop = Utils.clamp(list.scrollTop + delta, 0, list.scrollHeight);
+        const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+        if (direction > 0 && nearBottom && Comments.state.nextPage && !Comments.state.loading) {
+            Comments.loadPage();
+        }
     }
 };
 
@@ -1068,10 +1223,29 @@ function setupRemote() {
             const p = App.playerElements ? App.playerElements.player : el("native-player");
             const item = App.items[App.focus.index];
 
+            if (Comments.isOpen()) {
+                switch (e.keyCode) {
+                    case 38: // UP
+                        Comments.scroll(-1);
+                        break;
+                    case 40: // DOWN
+                        Comments.scroll(1);
+                        break;
+                    case 10009: // BACK
+                        Comments.close();
+                        break;
+                    case 405: // YELLOW
+                        Comments.toggle();
+                        break;
+                }
+                if (e.keyCode === 38 || e.keyCode === 40 || e.keyCode === 10009 || e.keyCode === 405) return;
+            }
+
             switch (e.keyCode) {
                 case 10009: // BACK
                     App.view = "BROWSE";
                     el("player-layer").classList.add("hidden");
+                    Comments.reset();
                     Player.stop();
                     break;
                 case 415: case 13: // PLAY or OK
@@ -1110,8 +1284,8 @@ function setupRemote() {
                 case 404: // GREEN - Playback speed
                     if (App.playerMode === "BYPASS") Player.cycleSpeed();
                     break;
-                case 405: // YELLOW - Video info
-                    Player.toggleInfo();
+                case 405: // YELLOW - Comments
+                    Comments.toggle();
                     break;
                 case 406: // BLUE - Subscribe
                     if (item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
@@ -1296,6 +1470,7 @@ window.onload = async () => {
     setInterval(tick, 60000);
 
     UI.initLazyObserver();
+    Comments.init();
 
     if (typeof tizen !== 'undefined') {
         const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'Return', 'Info'];
