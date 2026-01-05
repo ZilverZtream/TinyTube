@@ -421,7 +421,7 @@ const Utils = {
             });
         });
     },
-    fetchDedup: async (url, options = {}, timeout = CONFIG.TIMEOUT) => {
+    fetchDedup: (url, options = {}, timeout = CONFIG.TIMEOUT) => {
         if (options.signal) {
             return Utils.fetchWithTimeout(url, options, timeout);
         }
@@ -533,21 +533,28 @@ const Utils = {
         }
         return promise;
     },
-    processQueue: async (items, limit, asyncFn) => {
+    processQueue: (items, limit, asyncFn) => {
         let results = new Array(items.length);
         const executing = [];
-        for (let i = 0; i < items.length; i++) {
+
+        const enqueue = (i) => {
+            if (i >= items.length) return Promise.resolve();
             const idx = i;
-            const p = asyncFn(items[i]).then(r => { results[idx] = r; });
+            const p = Promise.resolve()
+                .then(() => asyncFn(items[i]))
+                .then(r => { results[idx] = r; });
             const wrapped = p.then(() => {
                 const pos = executing.indexOf(wrapped);
                 if (pos !== -1) executing.splice(pos, 1);
             });
             executing.push(wrapped);
-            if (executing.length >= limit) await Promise.race(executing);
-        }
-        await Promise.all(executing);
-        return results;
+            const ready = executing.length >= limit ? Promise.race(executing) : Promise.resolve();
+            return ready.then(() => enqueue(i + 1));
+        };
+
+        return enqueue(0)
+            .then(() => Promise.all(executing))
+            .then(() => results);
     },
     isValidUrl: (s) => {
         try {

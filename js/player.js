@@ -351,23 +351,30 @@ const Player = {
             videoThumbnails: item.videoThumbnails || item.thumbnails || item.thumbnail || []
         };
     },
-    loadUpNext: async (data, vId) => {
+    loadUpNext: (data, vId) => {
         let list = Array.isArray(data && data.recommendedVideos) ? data.recommendedVideos : [];
         if (!list.length && TinyTube.App.api) {
-            try {
-                const res = await TinyTube.Utils.fetchWithTimeout(`${TinyTube.App.api}/related/${vId}`);
-                if (res.ok) {
-                    const related = await res.json();
+            return TinyTube.Utils.fetchWithTimeout(`${TinyTube.App.api}/related/${vId}`)
+                .then(res => {
+                    if (!res.ok) return null;
+                    return res.json();
+                })
+                .then(related => {
                     if (Array.isArray(related)) list = related;
-                }
-            } catch {}
+                })
+                .catch(() => {})
+                .then(() => {
+                    TinyTube.App.upNext = (list || []).map(Player.normalizeUpNextItem).filter(Boolean);
+                    HUD.renderUpNext();
+                });
         }
         TinyTube.App.upNext = (list || []).map(Player.normalizeUpNextItem).filter(Boolean);
         HUD.renderUpNext();
+        return Promise.resolve();
     },
     
-    start: async (item, retryCount = 0) => {
-        if (!item) return;
+    start: (item, retryCount = 0) => {
+        if (!item) return Promise.resolve();
 
         // FIX: Clean up any existing embed listeners/timeouts from previous video
         Player.cleanupEmbedResources();
@@ -404,7 +411,7 @@ const Player = {
         ScreenSaver.disable();
         if (!TinyTube.App.playerElements) Player.cacheElements();
         const vId = TinyTube.Utils.getVideoId(item);
-        if(!vId) { TinyTube.Utils.toast("Error: No ID"); return; }
+        if(!vId) { TinyTube.Utils.toast("Error: No ID"); return Promise.resolve(); }
         TinyTube.App.currentVideoId = vId;
         TinyTube.App.currentVideoLoadId++;
 
@@ -459,13 +466,15 @@ const Player = {
             }
         }
 
-        const hydrateFromApi = async () => {
-            try {
-                const res = await TinyTube.Utils.fetchWithTimeout(`${TinyTube.App.api}/videos/${vId}`, { signal });
-                if (!isCurrent()) return;
-                if (res.ok) {
-                    const data = await res.json();
-                    if (!isCurrent()) return;
+        const hydrateFromApi = () => {
+            return TinyTube.Utils.fetchWithTimeout(`${TinyTube.App.api}/videos/${vId}`, { signal })
+                .then(res => {
+                    if (!isCurrent()) return null;
+                    if (!res.ok) return null;
+                    return res.json();
+                })
+                .then(data => {
+                    if (!data || !isCurrent()) return null;
                     TinyTube.App.currentVideoData = data;
 
                     // Parse video chapters from description
@@ -480,80 +489,97 @@ const Player = {
                     const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
                     TinyTube.App.availableQualities = formats.sort((a, b) => (b.height || 0) - (a.height || 0));
 
-                    await Player.loadUpNext(data, vId);
-                    if (!isCurrent()) return;
-                    Player.setupCaptions(data);
+                    return Player.loadUpNext(data, vId).then(() => {
+                        if (!isCurrent()) return null;
+                        Player.setupCaptions(data);
 
-                    const cappedFormats = TinyTube.Utils.applyResolutionCap(formats);
-                    const preferred = TinyTube.Utils.pickPreferredStream(cappedFormats);
-                    if (preferred && preferred.url) {
-                        if (!streamUrl) {
-                            streamUrl = preferred.url;
-                            TinyTube.Utils.toast("Src: API");
+                        const cappedFormats = TinyTube.Utils.applyResolutionCap(formats);
+                        const preferred = TinyTube.Utils.pickPreferredStream(cappedFormats);
+                        if (preferred && preferred.url) {
+                            if (!streamUrl) {
+                                streamUrl = preferred.url;
+                                TinyTube.Utils.toast("Src: API");
+                            }
+                            if (!TinyTube.App.currentQuality) {
+                                TinyTube.App.currentQuality = preferred;
+                            }
                         }
-                        if (!TinyTube.App.currentQuality) {
-                            TinyTube.App.currentQuality = preferred;
-                        }
-                    }
 
-                    // Save video metadata to history for later display
-                    if (data.title && data.author) {
-                        TinyTube.DB.saveVideoToHistory(vId, {
-                            title: data.title,
-                            author: data.author,
-                            authorId: data.authorId,
-                            videoThumbnails: data.videoThumbnails
-                        });
-                    }
-                }
-            } catch(e) {
-                if (e.name !== 'AbortError') console.log("API failed:", e.message);
-            }
+                        // Save video metadata to history for later display
+                        if (data.title && data.author) {
+                            TinyTube.DB.saveVideoToHistory(vId, {
+                                title: data.title,
+                                author: data.author,
+                                authorId: data.authorId,
+                                videoThumbnails: data.videoThumbnails
+                            });
+                        }
+                        return null;
+                    });
+                })
+                .catch((e) => {
+                    if (e && e.name === 'AbortError') return null;
+                    console.log("API failed:", e.message);
+                    return null;
+                });
         };
 
+        let apiWaitPromise = Promise.resolve();
         if (TinyTube.App.api) {
             if (streamUrl) {
                 apiPromise = hydrateFromApi();
             } else {
-                await hydrateFromApi();
+                apiWaitPromise = hydrateFromApi();
             }
         }
 
-        if (!streamUrl) {
-            try {
-                const direct = await Extractor.extractInnertube(vId, signal);
-                if (!isCurrent()) return;
-                if (direct && direct.url) {
-                    streamUrl = direct.url;
-                    TinyTube.App.currentVideoData = direct.meta;
-                    if (direct.meta.captions && direct.meta.captions.length) Player.setupCaptions({captions: direct.meta.captions});
-                    TinyTube.Utils.toast("Src: Direct");
+        return apiWaitPromise
+            .then(() => {
+                if (streamUrl) return null;
+                return Extractor.extractInnertube(vId, signal)
+                    .then(direct => {
+                        if (!isCurrent()) return null;
+                        if (direct && direct.url) {
+                            streamUrl = direct.url;
+                            TinyTube.App.currentVideoData = direct.meta;
+                            if (direct.meta.captions && direct.meta.captions.length) Player.setupCaptions({captions: direct.meta.captions});
+                            TinyTube.Utils.toast("Src: Direct");
+                        }
+                        return null;
+                    })
+                    .catch((e) => {
+                        if (e && e.name === 'AbortError') return null;
+                        console.log("Innertube failed:", e.message);
+                        return null;
+                    });
+            })
+            .then(() => {
+                if (!TinyTube.App.upNext.length && !apiPromise) {
+                    return Player.loadUpNext(null, vId).then(() => {
+                        if (!isCurrent()) return null;
+                        return null;
+                    });
                 }
-            } catch(e) {
-                if (e.name !== 'AbortError') console.log("Innertube failed:", e.message);
-            }
-        }
+                return null;
+            })
+            .then(() => {
+                if (!isCurrent()) return null;
 
-        if (!TinyTube.App.upNext.length && !apiPromise) {
-            await Player.loadUpNext(null, vId);
-            if (!isCurrent()) return;
-        }
-
-        if (!isCurrent()) return;
-
-        if (streamUrl) {
-            TinyTube.App.currentStreamUrl = streamUrl;
-            p.src = streamUrl;
-            p.style.display = "block";
-            const savedPos = TinyTube.DB.getPosition(vId);
-            if (savedPos > 0) { p.currentTime = savedPos; TinyTube.Utils.toast(`Resume: ${TinyTube.Utils.formatTime(savedPos)}`); }
-            p.play().catch(e => { console.log("Play failed", e); Player.enforce(vId); });
-            Player.setupHUD(p);
-            Player.startRenderLoop();
-        } else {
-            Player.enforce(vId);
-        }
-        TinyTube.App.playerElements.bufferingSpinner.classList.add("hidden");
+                if (streamUrl) {
+                    TinyTube.App.currentStreamUrl = streamUrl;
+                    p.src = streamUrl;
+                    p.style.display = "block";
+                    const savedPos = TinyTube.DB.getPosition(vId);
+                    if (savedPos > 0) { p.currentTime = savedPos; TinyTube.Utils.toast(`Resume: ${TinyTube.Utils.formatTime(savedPos)}`); }
+                    p.play().catch(e => { console.log("Play failed", e); Player.enforce(vId); });
+                    Player.setupHUD(p);
+                    Player.startRenderLoop();
+                } else {
+                    Player.enforce(vId);
+                }
+                TinyTube.App.playerElements.bufferingSpinner.classList.add("hidden");
+                return null;
+            });
     },
     
     enforce: (vId) => {
@@ -831,52 +857,50 @@ const Player = {
         HUD.updateSpeedBadge(s);
         TinyTube.Utils.toast(`Speed: ${s}x`);
     },
-    preloadNextVideo: async () => {
-        if (TinyTube.App.preloadedNextVideo || !TinyTube.App.upNext || TinyTube.App.upNext.length === 0) return;
+    preloadNextVideo: () => {
+        if (TinyTube.App.preloadedNextVideo || !TinyTube.App.upNext || TinyTube.App.upNext.length === 0) return Promise.resolve();
 
         const nextVideo = TinyTube.App.upNext[0];
-        if (!nextVideo || !nextVideo.videoId) return;
+        if (!nextVideo || !nextVideo.videoId) return Promise.resolve();
 
         TinyTube.App.preloadedNextVideo = nextVideo.videoId;
 
-        try {
-            // Preload the stream URL in the background
-            if (TinyTube.App.api) {
-                const vId = nextVideo.videoId;
-                if (TinyTube.App.preloadAbortController) {
-                    TinyTube.App.preloadAbortController.abort();
-                }
-                TinyTube.App.preloadAbortController = new AbortController();
-                const preloadSignal = TinyTube.App.preloadAbortController.signal;
-                TinyTube.Utils.fetchDedup(`${TinyTube.App.api}/videos/${vId}`, { signal: preloadSignal })
-                    .then(res => res.ok ? res.json() : null)
-                    .then(data => {
-                        if (data && data.formatStreams) {
-                            const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
-                            const cappedFormats = TinyTube.Utils.applyResolutionCap(formats);
-                            const preferred = TinyTube.Utils.pickPreferredStream(cappedFormats);
-                            if (preferred && preferred.url) {
-                                // FIX: Store URL with timestamp to prevent using expired URLs
-                                TinyTube.App.streamCache.set(vId, {
-                                    url: preferred.url,
-                                    ts: Date.now()
-                                });
-                                console.log('Preloaded next video:', vId);
-                            }
-                        }
-                    })
-                    .catch(e => {
-                        if (e.name !== "AbortError") console.log('Preload failed:', e.message);
-                    })
-                    .finally(() => {
-                        if (TinyTube.App.preloadAbortController && TinyTube.App.preloadAbortController.signal === preloadSignal) {
-                            TinyTube.App.preloadAbortController = null;
-                        }
-                    });
+        // Preload the stream URL in the background
+        if (TinyTube.App.api) {
+            const vId = nextVideo.videoId;
+            if (TinyTube.App.preloadAbortController) {
+                TinyTube.App.preloadAbortController.abort();
             }
-        } catch (e) {
-            console.log('Preload error:', e.message);
+            TinyTube.App.preloadAbortController = new AbortController();
+            const preloadSignal = TinyTube.App.preloadAbortController.signal;
+            return TinyTube.Utils.fetchDedup(`${TinyTube.App.api}/videos/${vId}`, { signal: preloadSignal })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                    if (data && data.formatStreams) {
+                        const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
+                        const cappedFormats = TinyTube.Utils.applyResolutionCap(formats);
+                        const preferred = TinyTube.Utils.pickPreferredStream(cappedFormats);
+                        if (preferred && preferred.url) {
+                            // FIX: Store URL with timestamp to prevent using expired URLs
+                            TinyTube.App.streamCache.set(vId, {
+                                url: preferred.url,
+                                ts: Date.now()
+                            });
+                            console.log('Preloaded next video:', vId);
+                        }
+                    }
+                    return null;
+                })
+                .catch(e => {
+                    if (e.name !== "AbortError") console.log('Preload failed:', e.message);
+                })
+                .finally(() => {
+                    if (TinyTube.App.preloadAbortController && TinyTube.App.preloadAbortController.signal === preloadSignal) {
+                        TinyTube.App.preloadAbortController = null;
+                    }
+                });
         }
+        return Promise.resolve();
     },
     toggleInfo: () => {
         const overlay = el("video-info-overlay");
@@ -1031,8 +1055,8 @@ const Comments = {
         Comments.elements.count.textContent = "0 comments";
         Comments.elements.page.textContent = "Page 1";
     },
-    open: async () => {
-        if(!TinyTube.App.currentVideoId || !TinyTube.App.api) return;
+    open: () => {
+        if(!TinyTube.App.currentVideoId || !TinyTube.App.api) return Promise.resolve();
         if(!Comments.elements) Comments.cache();
         Comments.state.open = true;
         Comments.elements.overlay.classList.remove("hidden");
@@ -1046,8 +1070,9 @@ const Comments = {
             Comments.elements.overlay.classList.remove("hidden");
             Comments.elements.list.textContent = "Loading...";
             Comments.state.videoId = TinyTube.App.currentVideoId;
-            await Comments.loadPage();
+            return Comments.loadPage();
         }
+        return Promise.resolve();
     },
     close: () => {
         if(!Comments.elements) Comments.cache();
@@ -1058,52 +1083,57 @@ const Comments = {
         HUD.refreshPinned();
     },
     toggle: () => Comments.isOpen() ? Comments.close() : Comments.open(),
-    loadPage: async () => {
-        if(Comments.state.loading || Date.now() < Comments.state.cooldownUntil) return;
+    loadPage: () => {
+        if(Comments.state.loading || Date.now() < Comments.state.cooldownUntil) return Promise.resolve();
         const requestedVideoId = TinyTube.App.currentVideoId;
         Comments.state.loading = true;
         Comments.elements.footer.classList.remove("hidden");
-        try {
-            const u = `${TinyTube.App.api}/comments/${requestedVideoId}${Comments.state.nextPage ? "?continuation="+Comments.state.nextPage : ""}`;
-            const res = await TinyTube.Utils.fetchWithTimeout(u);
-            if(!res.ok) throw new Error("HTTP " + res.status);
-            const data = await res.json();
-
-            // Check if we're still on the same video
-            if(Comments.state.videoId !== requestedVideoId) {
-                console.log("Comments load cancelled: video changed");
-                Comments.state.loading = false;
-                return;
-            }
-
-            if(data.comments) {
-                if(Comments.state.page===1) {
-                    Comments.elements.list.textContent = "";
-                    const count = data.commentCount || data.comments.length;
-                    Comments.elements.count.textContent = count + " comment" + (count !== 1 ? "s" : "");
+        const u = `${TinyTube.App.api}/comments/${requestedVideoId}${Comments.state.nextPage ? "?continuation="+Comments.state.nextPage : ""}`;
+        return TinyTube.Utils.fetchWithTimeout(u)
+            .then(res => {
+                if(!res.ok) throw new Error("HTTP " + res.status);
+                return res.json();
+            })
+            .then(data => {
+                // Check if we're still on the same video
+                if(Comments.state.videoId !== requestedVideoId) {
+                    console.log("Comments load cancelled: video changed");
+                    Comments.state.loading = false;
+                    return null;
                 }
-                Comments.elements.page.textContent = "Page " + Comments.state.page;
-                data.comments.forEach(function(c) {
-                    var d = TinyTube.Utils.create("div", "comment-item");
-                    var author = TinyTube.Utils.create("div", "comment-author");
-                    author.textContent = c.author || "";
-                    var text = TinyTube.Utils.create("div", "comment-text");
-                    text.textContent = c.content || c.contentText || "";
-                    d.appendChild(author);
-                    d.appendChild(text);
-                    Comments.elements.list.appendChild(d);
-                });
-            }
-            Comments.state.nextPage = data.continuation;
-            Comments.state.page++;
-        } catch(e) {
-            if(Comments.state.videoId === requestedVideoId) {
-                Comments.elements.list.textContent = "Error loading comments.";
-            }
-        }
-        Comments.state.loading = false;
-        Comments.state.cooldownUntil = Date.now() + 300;
-        if(!Comments.state.nextPage) Comments.elements.footer.classList.add("hidden");
+
+                if(data.comments) {
+                    if(Comments.state.page===1) {
+                        Comments.elements.list.textContent = "";
+                        const count = data.commentCount || data.comments.length;
+                        Comments.elements.count.textContent = count + " comment" + (count !== 1 ? "s" : "");
+                    }
+                    Comments.elements.page.textContent = "Page " + Comments.state.page;
+                    data.comments.forEach(function(c) {
+                        var d = TinyTube.Utils.create("div", "comment-item");
+                        var author = TinyTube.Utils.create("div", "comment-author");
+                        author.textContent = c.author || "";
+                        var text = TinyTube.Utils.create("div", "comment-text");
+                        text.textContent = c.content || c.contentText || "";
+                        d.appendChild(author);
+                        d.appendChild(text);
+                        Comments.elements.list.appendChild(d);
+                    });
+                }
+                Comments.state.nextPage = data.continuation;
+                Comments.state.page++;
+                return null;
+            })
+            .catch(() => {
+                if(Comments.state.videoId === requestedVideoId) {
+                    Comments.elements.list.textContent = "Error loading comments.";
+                }
+            })
+            .then(() => {
+                Comments.state.loading = false;
+                Comments.state.cooldownUntil = Date.now() + 300;
+                if(!Comments.state.nextPage) Comments.elements.footer.classList.add("hidden");
+            });
     },
     scroll: (dir) => {
         const l = Comments.elements.list;
