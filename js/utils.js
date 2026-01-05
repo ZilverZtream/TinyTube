@@ -419,8 +419,64 @@ const Utils = {
                     headers: headersEntries
                 };
 
-                if (typeof options.body === 'string') {
-                    normalized.body = options.body;
+                const normalizeBody = (body) => {
+                    if (body == null) return null;
+                    if (typeof body === 'string') return body;
+                    if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+                        return body.toString();
+                    }
+                    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+                        const entries = [];
+                        if (typeof body.forEach !== 'function') return null;
+                        body.forEach((value, key) => {
+                            let normalizedValue = null;
+                            if (typeof value === 'string') {
+                                normalizedValue = value;
+                            } else if (typeof File !== 'undefined' && value instanceof File) {
+                                normalizedValue = {
+                                    name: value.name,
+                                    size: value.size,
+                                    type: value.type,
+                                    lastModified: value.lastModified
+                                };
+                            } else if (typeof Blob !== 'undefined' && value instanceof Blob) {
+                                normalizedValue = { size: value.size, type: value.type };
+                            } else {
+                                normalizedValue = String(value);
+                            }
+                            entries.push([key, normalizedValue]);
+                        });
+                        entries.sort((a, b) => {
+                            const keyCompare = a[0].localeCompare(b[0]);
+                            if (keyCompare !== 0) return keyCompare;
+                            return JSON.stringify(a[1]).localeCompare(JSON.stringify(b[1]));
+                        });
+                        return JSON.stringify(entries);
+                    }
+                    if (typeof body === 'object') {
+                        const stableStringify = (value) => {
+                            if (value === null || typeof value !== 'object') {
+                                return JSON.stringify(value);
+                            }
+                            if (Array.isArray(value)) {
+                                return '[' + value.map(stableStringify).join(',') + ']';
+                            }
+                            const keys = Object.keys(value).sort();
+                            const items = keys.map((key) => {
+                                return JSON.stringify(key) + ':' + stableStringify(value[key]);
+                            });
+                            return '{' + items.join(',') + '}';
+                        };
+                        return stableStringify(body);
+                    }
+                    return null;
+                };
+
+                const normalizedBody = normalizeBody(options.body);
+                if (normalizedBody !== null) {
+                    normalized.body = normalizedBody;
+                } else if (options.body !== undefined) {
+                    return null;
                 }
 
                 return url + '|' + JSON.stringify(normalized);
