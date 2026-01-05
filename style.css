@@ -12,7 +12,7 @@ body {
     color: #f1f1f1;
     font-family: 'Segoe UI', Roboto, sans-serif;
     overflow: hidden;
-    contain: layout style;
+    contain: layout;
 }
 .hidden { display: none !important; }
 
@@ -30,7 +30,7 @@ body {
     z-index: 10;
     transition: width 0.3s cubic-bezier(0.2,0,0,1);
     box-shadow: 2px 0 20px rgba(0,0,0,0.5);
-    contain: layout style paint;
+    contain: layout;
 }
 #sidebar.expanded {
     width: 260px;
@@ -44,7 +44,7 @@ body {
     display: flex;
     flex-direction: column;
     background: linear-gradient(135deg, #0a0a0a 0%, #111 100%);
-    contain: layout style;
+    contain: layout;
 }
 
 /* HEADER ROW */
@@ -167,7 +167,7 @@ body {
     flex-grow: 1;
     margin-left: -1%;
     width: 102%;
-    contain: layout style;
+    contain: layout;
 }
 #grid-container::-webkit-scrollbar { width: 6px; }
 #grid-container::-webkit-scrollbar-track { background: #111; }
@@ -185,7 +185,7 @@ body {
     transition: all 0.25s cubic-bezier(0.2,0,0,1);
     position: relative;
     box-sizing: border-box;
-    contain: layout style paint;
+    contain: layout;
 }
 
 .video-card.focused, .channel-card.focused {
@@ -206,7 +206,7 @@ body {
     position: relative;
     background: linear-gradient(135deg, #222 0%, #1a1a1a 100%);
     overflow: hidden;
-    contain: layout style paint;
+    contain: layout;
 }
 .thumb {
     position: absolute;
@@ -284,7 +284,7 @@ body {
 
 .meta {
     padding: 14px 16px;
-    contain: layout style paint;
+    contain: layout;
 }
 .meta h3 {
     margin: 0;
@@ -758,7 +758,7 @@ iframe {
 .comment-item {
     padding: 14px 0;
     border-bottom: 1px solid #222;
-    contain: layout style paint;
+    contain: layout;
 }
 .comment-item:last-child {
     border-bottom: none;

@@ -72,6 +72,91 @@ const CONFIG = {
     WEB_WORKER_ENABLED: typeof Worker !== 'undefined'
 };
 
+// --- CHROME 56 POLYFILLS ---
+// Chrome 56 (Tizen 4.0) is missing several modern JavaScript features
+// Provide minimal polyfills for compatibility
+
+// 1. AbortController (NOT in Chrome 56)
+if (typeof AbortController === 'undefined') {
+    console.log('TinyTube: Adding AbortController polyfill for Chrome 56');
+
+    window.AbortSignal = function() {
+        this._aborted = false;
+        this._listeners = [];
+    };
+    AbortSignal.prototype.addEventListener = function(type, listener) {
+        if (type === 'abort') {
+            this._listeners.push(listener);
+        }
+    };
+    AbortSignal.prototype.removeEventListener = function(type, listener) {
+        if (type === 'abort') {
+            const idx = this._listeners.indexOf(listener);
+            if (idx !== -1) this._listeners.splice(idx, 1);
+        }
+    };
+    AbortSignal.prototype._fire = function() {
+        if (this._aborted) return;
+        this._aborted = true;
+        this._listeners.forEach(function(listener) {
+            try { listener(); } catch(e) { console.error('AbortSignal listener error:', e); }
+        });
+    };
+    Object.defineProperty(AbortSignal.prototype, 'aborted', {
+        get: function() { return this._aborted; }
+    });
+
+    window.AbortController = function() {
+        this.signal = new AbortSignal();
+    };
+    AbortController.prototype.abort = function() {
+        this.signal._fire();
+    };
+}
+
+// 2. Object.entries() (NOT in Chrome 56)
+if (!Object.entries) {
+    console.log('TinyTube: Adding Object.entries polyfill for Chrome 56');
+    Object.entries = function(obj) {
+        var ownProps = Object.keys(obj);
+        var i = ownProps.length;
+        var resArray = new Array(i);
+        while (i--) {
+            resArray[i] = [ownProps[i], obj[ownProps[i]]];
+        }
+        return resArray;
+    };
+}
+
+// 3. Object.fromEntries() (NOT in Chrome 56)
+if (!Object.fromEntries) {
+    console.log('TinyTube: Adding Object.fromEntries polyfill for Chrome 56');
+    Object.fromEntries = function(entries) {
+        var obj = {};
+        for (var i = 0; i < entries.length; i++) {
+            var entry = entries[i];
+            obj[entry[0]] = entry[1];
+        }
+        return obj;
+    };
+}
+
+// 4. Promise.prototype.finally() (NOT in Chrome 56 - added in Chrome 63)
+if (typeof Promise !== 'undefined' && !Promise.prototype.finally) {
+    console.log('TinyTube: Adding Promise.finally polyfill for Chrome 56');
+    Promise.prototype.finally = function(callback) {
+        var P = this.constructor;
+        return this.then(
+            function(value) {
+                return P.resolve(callback()).then(function() { return value; });
+            },
+            function(reason) {
+                return P.resolve(callback()).then(function() { throw reason; });
+            }
+        );
+    };
+}
+
 // --- O(1) LRU CACHE ---
 function LRUCache(limit) {
     this.limit = limit;
