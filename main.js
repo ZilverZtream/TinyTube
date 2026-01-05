@@ -117,6 +117,7 @@ const App = {
     seekRepeatCount: 0,
     // Cached DOM elements for render loop (60fps optimization)
     playerElements: null,
+    screenSaverState: null,
     // Watch history for resume
     watchHistory: null
 };
@@ -741,6 +742,7 @@ const Player = {
         App.currentVideoData = null;
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
+        ScreenSaver.disable();
 
         // Cache DOM elements if not already
         if (!App.playerElements) Player.cacheElements();
@@ -1047,6 +1049,7 @@ const Player = {
         App.currentVideoData = null;
         App.seekKeyHeld = null;
         Player.clearCaptions();
+        ScreenSaver.restore();
     }
 };
 
@@ -1416,6 +1419,7 @@ function setupRemote() {
             case 10009: // BACK
                 App.exitCounter++;
                 if (App.exitCounter >= 2) {
+                    ScreenSaver.restore();
                     if (typeof tizen !== 'undefined') tizen.application.getCurrentApplication().exit();
                 } else Utils.toast("Back Again to Exit");
                 break;
@@ -1474,6 +1478,38 @@ const HUD = {
     }
 };
 
+const ScreenSaver = {
+    defaultState: () => {
+        if (window.webapis && window.webapis.appcommon && webapis.appcommon.AppCommonScreenSaverState) {
+            return webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_ON;
+        }
+        return "SCREEN_SAVER_ON";
+    },
+    normalizeState: (state) => {
+        if (!window.webapis || !window.webapis.appcommon) return null;
+        if (typeof state === "string" && webapis.appcommon.AppCommonScreenSaverState) {
+            return webapis.appcommon.AppCommonScreenSaverState[state] || state;
+        }
+        return state;
+    },
+    setState: (state) => {
+        if (!window.webapis || !window.webapis.appcommon) return;
+        const resolvedState = ScreenSaver.normalizeState(state);
+        if (!resolvedState) return;
+        try {
+            webapis.appcommon.setScreenSaver(resolvedState);
+        } catch (e) {}
+    },
+    disable: () => {
+        if (!window.webapis || !window.webapis.appcommon) return;
+        if (!webapis.appcommon.AppCommonScreenSaverState) return;
+        ScreenSaver.setState(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_OFF);
+    },
+    restore: () => {
+        ScreenSaver.setState(App.screenSaverState);
+    }
+};
+
 window.onload = async () => {
     const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     tick();
@@ -1488,10 +1524,15 @@ window.onload = async () => {
     }
 
     // Disable screensaver to prevent screen dimming during video playback
+    App.screenSaverState = ScreenSaver.defaultState();
     if (window.webapis && window.webapis.appcommon) {
-        try {
-            webapis.appcommon.setScreenSaver(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_OFF);
-        } catch (e) {}
+        if (typeof webapis.appcommon.getScreenSaver === "function") {
+            try {
+                const currentState = webapis.appcommon.getScreenSaver();
+                if (currentState) App.screenSaverState = currentState;
+            } catch (e) {}
+        }
+        ScreenSaver.disable();
     }
 
     el("backend-status").textContent = "Init...";
