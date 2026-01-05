@@ -651,6 +651,10 @@ const Player = {
         if (!App.playerElements) Player.cacheElements();
 
         const vId = Utils.getVideoId(item);
+        if (!vId) {
+            Utils.toast("Missing video ID");
+            return;
+        }
         App.currentVideoId = vId;
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
