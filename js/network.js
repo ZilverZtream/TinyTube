@@ -70,77 +70,76 @@ const CipherBreaker = {
             : CONFIG.CIPHER_PROXY + encodeURIComponent(target);
     },
 
-    run: async () => {
-        if (CipherBreaker.cache) return CipherBreaker.cache;
+    run: () => {
+        if (CipherBreaker.cache) return Promise.resolve(CipherBreaker.cache);
         const cached = CipherBreaker.getCache();
-        if (cached) return cached;
+        if (cached) return Promise.resolve(cached);
 
-        try {
-            console.log("CipherBreaker: Fetching player.js...");
+        console.log("CipherBreaker: Fetching player.js...");
 
-            // Use a highly reliable, unrestricted video ID to fetch the player script
-            const videoId = "jNQXAC9IVRw"; // "Me at the zoo" - YouTube's first video
-            const vidRes = await Utils.fetchWithTimeout(
-                CipherBreaker.proxyUrl(`https://www.youtube.com/watch?v=${videoId}`)
-            );
-            const vidText = await vidRes.text();
+        // Use a highly reliable, unrestricted video ID to fetch the player script
+        const videoId = "jNQXAC9IVRw"; // "Me at the zoo" - YouTube's first video
+        return Utils.fetchWithTimeout(
+            CipherBreaker.proxyUrl(`https://www.youtube.com/watch?v=${videoId}`)
+        )
+            .then(vidRes => vidRes.text())
+            .then(vidText => {
+                const playerUrlMatch = vidText.match(/\/s\/player\/[a-zA-Z0-9]+\/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_]+\/base\.js/);
+                if (!playerUrlMatch) throw new Error("No player.js url found");
 
-            const playerUrlMatch = vidText.match(/\/s\/player\/[a-zA-Z0-9]+\/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_]+\/base\.js/);
-            if (!playerUrlMatch) throw new Error("No player.js url found");
+                return Utils.fetchWithTimeout(
+                    CipherBreaker.proxyUrl("https://www.youtube.com" + playerUrlMatch[0])
+                ).then(playerRes => playerRes.text());
+            })
+            .then(raw => {
+                let funcBody = null;
+                let helperName = null;
 
-            const playerRes = await Utils.fetchWithTimeout(
-                CipherBreaker.proxyUrl("https://www.youtube.com" + playerUrlMatch[0])
-            );
-            const raw = await playerRes.text();
-
-            let funcBody = null;
-            let helperName = null;
-
-            // 1. Find the main decipher function using multiple regex strategies
-            for (const pattern of CipherBreaker.funcPatterns) {
-                const match = raw.match(pattern);
-                if (match) {
-                    if (pattern.source.includes("return")) {
-                        // Patterns with 'return' capture the function body or operations
-                        funcBody = match[1] || match[0];
-                        // Extract helper name from within the body (e.g., "AB.xy(a,3)")
-                        const helperMatch = funcBody.match(/([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a/);
-                        if (helperMatch) helperName = helperMatch[1];
-                    } else {
-                        // First pattern captures both function and helper name directly
-                        funcBody = match[0];
-                        helperName = match[1];
+                // 1. Find the main decipher function using multiple regex strategies
+                for (const pattern of CipherBreaker.funcPatterns) {
+                    const match = raw.match(pattern);
+                    if (match) {
+                        if (pattern.source.includes("return")) {
+                            // Patterns with 'return' capture the function body or operations
+                            funcBody = match[1] || match[0];
+                            // Extract helper name from within the body (e.g., "AB.xy(a,3)")
+                            const helperMatch = funcBody.match(/([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a/);
+                            if (helperMatch) helperName = helperMatch[1];
+                        } else {
+                            // First pattern captures both function and helper name directly
+                            funcBody = match[0];
+                            helperName = match[1];
+                        }
+                        if (funcBody && helperName) break;
                     }
-                    if (funcBody && helperName) break;
                 }
-            }
 
-            if (!funcBody || !helperName) {
-                console.log("CipherBreaker: Regex failed, trying simple fallback");
-                return CipherBreaker.parseManual(raw);
-            }
+                if (!funcBody || !helperName) {
+                    console.log("CipherBreaker: Regex failed, trying simple fallback");
+                    return CipherBreaker.parseManual(raw);
+                }
 
-            // 2. Extract the Helper Object Definition
-            const escapedName = helperName.replace(/\$/g, "\\$");
+                // 2. Extract the Helper Object Definition
+                const escapedName = helperName.replace(/\$/g, "\\$");
 
-            // Look for standard declaration: var/const/let Name = { ... };
-            const helperRegex = new RegExp(`(?:var|const|let)\\s+${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\};`);
-            let helperMatch = raw.match(helperRegex);
+                // Look for standard declaration: var/const/let Name = { ... };
+                const helperRegex = new RegExp(`(?:var|const|let)\\s+${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\};`);
+                let helperMatch = raw.match(helperRegex);
 
-            // Fallback: Look for assignment without keyword: Name = { ... };
-            if (!helperMatch) {
-                const looseHelperMatch = raw.match(new RegExp(`${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\};`));
-                if (!looseHelperMatch) throw new Error("Helper object not found");
-                helperMatch = looseHelperMatch;
-            }
+                // Fallback: Look for assignment without keyword: Name = { ... };
+                if (!helperMatch) {
+                    const looseHelperMatch = raw.match(new RegExp(`${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\};`));
+                    if (!looseHelperMatch) throw new Error("Helper object not found");
+                    helperMatch = looseHelperMatch;
+                }
 
-            // 3. Parse and solve
-            return CipherBreaker.parseFromText(funcBody, helperMatch[1], helperName);
-
-        } catch (e) {
-            console.log("CipherBreaker fail: " + e.message);
-            return CONFIG.DEFAULT_CIPHER;
-        }
+                // 3. Parse and solve
+                return CipherBreaker.parseFromText(funcBody, helperMatch[1], helperName);
+            })
+            .catch((e) => {
+                console.log("CipherBreaker fail: " + e.message);
+                return CONFIG.DEFAULT_CIPHER;
+            });
     },
 
     // Parse operations by analyzing code logic (Semantic Parsing)
@@ -259,84 +258,87 @@ const Extractor = {
         }
         return "";
     },
-    extractInnertube: async (videoId, signal = null) => {
-        try {
-            const body = {
-                context: {
-                    client: {
-                        clientName: CONFIG.CLIENT_NAME,
-                        clientVersion: CONFIG.CLIENT_VERSION,
-                        androidSdkVersion: CONFIG.SDK_VERSION,
-                        osName: "Android", osVersion: "15",
-                        platform: "MOBILE",
-                        hl: "en", gl: "US", utcOffsetMinutes: 0
-                    },
-                    thirdParty: { embedUrl: "https://www.youtube.com" }
+    extractInnertube: (videoId, signal = null) => {
+        const body = {
+            context: {
+                client: {
+                    clientName: CONFIG.CLIENT_NAME,
+                    clientVersion: CONFIG.CLIENT_VERSION,
+                    androidSdkVersion: CONFIG.SDK_VERSION,
+                    osName: "Android", osVersion: "15",
+                    platform: "MOBILE",
+                    hl: "en", gl: "US", utcOffsetMinutes: 0
                 },
-                videoId: videoId,
-                contentCheckOkay: true,
-                racyCheckOkay: true
-            };
-            const fetchOptions = {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "User-Agent": CONFIG.USER_AGENT,
-                    "X-YouTube-Client-Name": "3",
-                    "X-YouTube-Client-Version": CONFIG.CLIENT_VERSION,
-                    "Origin": "https://www.youtube.com",
-                    "Referer": "https://www.youtube.com",
-                    "Accept-Language": "en-US,en;q=0.9"
-                },
-                body: JSON.stringify(body)
-            };
-            if (signal) fetchOptions.signal = signal;
-            const res = await Utils.fetchWithTimeout("https://www.youtube.com/youtubei/v1/player", fetchOptions, 12000);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            if (!data.playabilityStatus || data.playabilityStatus.status !== "OK") {
-                throw new Error((data.playabilityStatus && data.playabilityStatus.reason) || "Unplayable");
-            }
-            const streamingData = data.streamingData;
-            if (!streamingData) throw new Error("No streams");
-            const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
-            const resolvedFormats = formats.map((format) => {
-                const url = Extractor.resolveFormatUrl(format);
-                return url ? Object.assign({}, format, { resolvedUrl: url }) : null;
-            }).filter(Boolean);
-            let best = Utils.pickPreferredStream(resolvedFormats.filter(f => f.resolvedUrl && f.audioQuality));
-            if (!best) best = Utils.pickPreferredStream(resolvedFormats);
-            if (!best || !best.resolvedUrl) throw new Error("No direct URL");
-            var captionTracks = data.captions && data.captions.playerCaptionsTracklistRenderer && data.captions.playerCaptionsTracklistRenderer.captionTracks;
-            var captions = captionTracks ? captionTracks.map(function(c) {
-                return {
-                    url: c.baseUrl + "&fmt=vtt",
-                    language_code: c.languageCode,
-                    name: (c.name && c.name.simpleText) || c.languageCode,
-                    vttUrl: c.baseUrl + "&fmt=vtt"
-                };
-            }) : [];
-            var publishDate = data.microformat && data.microformat.playerMicroformatRenderer && data.microformat.playerMicroformatRenderer.publishDate;
-            return {
-                url: best.resolvedUrl + "&alr=yes",
-                meta: {
-                    title: data.videoDetails.title,
-                    author: data.videoDetails.author,
-                    viewCount: data.videoDetails.viewCountText || data.videoDetails.viewCount || "0 views",
-                    description: data.videoDetails.shortDescription || "",
-                    published: publishDate ? (Date.parse(publishDate) / 1000) : (Date.now() / 1000),
-                    captions: captions
+                thirdParty: { embedUrl: "https://www.youtube.com" }
+            },
+            videoId: videoId,
+            contentCheckOkay: true,
+            racyCheckOkay: true
+        };
+        const fetchOptions = {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "User-Agent": CONFIG.USER_AGENT,
+                "X-YouTube-Client-Name": "3",
+                "X-YouTube-Client-Version": CONFIG.CLIENT_VERSION,
+                "Origin": "https://www.youtube.com",
+                "Referer": "https://www.youtube.com",
+                "Accept-Language": "en-US,en;q=0.9"
+            },
+            body: JSON.stringify(body)
+        };
+        if (signal) fetchOptions.signal = signal;
+        return Utils.fetchWithTimeout("https://www.youtube.com/youtubei/v1/player", fetchOptions, 12000)
+            .then(res => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return res.json();
+            })
+            .then(data => {
+                if (!data.playabilityStatus || data.playabilityStatus.status !== "OK") {
+                    throw new Error((data.playabilityStatus && data.playabilityStatus.reason) || "Unplayable");
                 }
-            };
-        } catch (e) {
-            console.log("Innertube failed:", e.message);
-            throw e;
-        }
+                const streamingData = data.streamingData;
+                if (!streamingData) throw new Error("No streams");
+                const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
+                const resolvedFormats = formats.map((format) => {
+                    const url = Extractor.resolveFormatUrl(format);
+                    return url ? Object.assign({}, format, { resolvedUrl: url }) : null;
+                }).filter(Boolean);
+                let best = Utils.pickPreferredStream(resolvedFormats.filter(f => f.resolvedUrl && f.audioQuality));
+                if (!best) best = Utils.pickPreferredStream(resolvedFormats);
+                if (!best || !best.resolvedUrl) throw new Error("No direct URL");
+                var captionTracks = data.captions && data.captions.playerCaptionsTracklistRenderer && data.captions.playerCaptionsTracklistRenderer.captionTracks;
+                var captions = captionTracks ? captionTracks.map(function(c) {
+                    return {
+                        url: c.baseUrl + "&fmt=vtt",
+                        language_code: c.languageCode,
+                        name: (c.name && c.name.simpleText) || c.languageCode,
+                        vttUrl: c.baseUrl + "&fmt=vtt"
+                    };
+                }) : [];
+                var publishDate = data.microformat && data.microformat.playerMicroformatRenderer && data.microformat.playerMicroformatRenderer.publishDate;
+                return {
+                    url: best.resolvedUrl + "&alr=yes",
+                    meta: {
+                        title: data.videoDetails.title,
+                        author: data.videoDetails.author,
+                        viewCount: data.videoDetails.viewCountText || data.videoDetails.viewCount || "0 views",
+                        description: data.videoDetails.shortDescription || "",
+                        published: publishDate ? (Date.parse(publishDate) / 1000) : (Date.now() / 1000),
+                        captions: captions
+                    }
+                };
+            })
+            .catch((e) => {
+                console.log("Innertube failed:", e.message);
+                throw e;
+            });
     }
 };
 
 const Network = {
-    connect: async () => {
+    connect: () => {
         const custom = SafeStorage.getItem("customBase");
         const normalizedCustom = custom ? Utils.normalizeUrl(custom) : "";
         if (normalizedCustom && Utils.isValidUrl(normalizedCustom)) {
@@ -346,7 +348,7 @@ const Network = {
             TinyTube.App.api = CONFIG.PRIMARY_API;
             el("backend-status").textContent = "API: Perditum";
         }
-        TinyTube.Feed.loadHome();
+        return TinyTube.Feed.loadHome();
     }
 };
 

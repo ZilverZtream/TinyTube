@@ -135,7 +135,7 @@ App.actions = {
         }
         else if(App.menuIdx===6) { App.view="SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
     },
-    runSearch: async () => {
+    runSearch: () => {
         const input = el("search-input");
         const q = input.value.trim();
         if (!q) return;
@@ -155,14 +155,16 @@ App.actions = {
             searchUrl += `&type=${App.searchFilters.type}`;
         }
 
-        const result = await Feed.fetch(searchUrl);
-        if (result && result.ok && result.hasItems) {
-            input.blur();
-            App.focus.area = "grid";
-            UI.updateFocus();
-        } else {
-            input.focus();
-        }
+        return Feed.fetch(searchUrl)
+            .then(result => {
+                if (result && result.ok && result.hasItems) {
+                    input.blur();
+                    App.focus.area = "grid";
+                    UI.updateFocus();
+                } else {
+                    input.focus();
+                }
+            });
     },
     saveSettings: () => {
         const previousCustomBase = SafeStorage.getItem("customBase");
@@ -463,7 +465,7 @@ function setupRemote() {
 }
 
 // --- INIT ---
-window.onload = async () => {
+window.onload = () => {
     const tick = () => el("clock").textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     tick(); setInterval(tick, 60000);
 
@@ -472,13 +474,15 @@ window.onload = async () => {
     WorkerPool.init();
 
     // Register service worker for API caching
+    let swPromise = Promise.resolve();
     if ('serviceWorker' in navigator) {
-        try {
-            await navigator.serviceWorker.register('sw.js');
-            console.log('Service Worker registered successfully');
-        } catch (e) {
-            console.log('Service Worker registration failed:', e.message);
-        }
+        swPromise = navigator.serviceWorker.register('sw.js')
+            .then(() => {
+                console.log('Service Worker registered successfully');
+            })
+            .catch((e) => {
+                console.log('Service Worker registration failed:', e.message);
+            });
     }
 
     // Add debounced window resize handler for virtual scrolling
@@ -514,40 +518,42 @@ window.onload = async () => {
 
     // --- STARTUP SEQUENCE ---
     el("backend-status").textContent = "Connecting...";
-    await Network.connect();
+    return swPromise
+        .then(() => Network.connect())
+        .then(() => {
+            const updateBackendStatus = (cipherStatus) => {
+                const apiLabel = App.api === CONFIG.PRIMARY_API ? "Perditum" : "Custom";
+                el("backend-status").textContent = `API: ${apiLabel} | Cipher: ${cipherStatus}`;
+            };
 
-    const updateBackendStatus = (cipherStatus) => {
-        const apiLabel = App.api === CONFIG.PRIMARY_API ? "Perditum" : "Custom";
-        el("backend-status").textContent = `API: ${apiLabel} | Cipher: ${cipherStatus}`;
-    };
+            updateBackendStatus("checking...");
+            CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
 
-    updateBackendStatus("checking...");
-    CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
+            requestAnimationFrame(() => {
+                const cipherTimeoutMs = 4000;
+                let cipherResolved = false;
+                const cipherTimeout = setTimeout(() => {
+                    if (!cipherResolved) {
+                        CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
+                        updateBackendStatus("default (timeout)");
+                    }
+                }, cipherTimeoutMs);
 
-    requestAnimationFrame(() => {
-        const cipherTimeoutMs = 4000;
-        let cipherResolved = false;
-        const cipherTimeout = setTimeout(() => {
-            if (!cipherResolved) {
-                CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
-                updateBackendStatus("default (timeout)");
-            }
-        }, cipherTimeoutMs);
-
-        CipherBreaker.run()
-            .then((freshCipher) => {
-                cipherResolved = true;
-                clearTimeout(cipherTimeout);
-                CONFIG.CIPHER_SEQUENCE = freshCipher;
-                updateBackendStatus("updated");
-            })
-            .catch((error) => {
-                cipherResolved = true;
-                clearTimeout(cipherTimeout);
-                console.log("Cipher breaker failed:", error?.message || error);
-                updateBackendStatus("default (error)");
+                CipherBreaker.run()
+                    .then((freshCipher) => {
+                        cipherResolved = true;
+                        clearTimeout(cipherTimeout);
+                        CONFIG.CIPHER_SEQUENCE = freshCipher;
+                        updateBackendStatus("updated");
+                    })
+                    .catch((error) => {
+                        cipherResolved = true;
+                        clearTimeout(cipherTimeout);
+                        console.log("Cipher breaker failed:", error?.message || error);
+                        updateBackendStatus("default (error)");
+                    });
             });
-    });
+        });
 };
 
 // --- CLEANUP ON EXIT ---

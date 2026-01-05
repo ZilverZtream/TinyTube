@@ -7,7 +7,7 @@
     const VirtualScroll = TinyTube.VirtualScroll;
 
 const Feed = {
-    loadHome: async () => {
+    loadHome: () => {
         const subs = TinyTube.DB.getSubs();
         if (subs.length === 0) {
             el("section-title").textContent = "Global Trending";
@@ -16,38 +16,48 @@ const Feed = {
         el("section-title").textContent = `My Feed (${subs.length})`;
         TinyTube.CardPool.releaseAll(el("grid-container"));
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Building Feed...</p></div>';
-        try {
-            const results = await Utils.processQueue(subs, 3, async (sub) => {
-                try {
-                    const res = await Utils.fetchDedup(`${TinyTube.App.api}/channels/${sub.id}/videos?page=1`);
+        return Utils.processQueue(subs, 3, (sub) => {
+            return Utils.fetchDedup(`${TinyTube.App.api}/channels/${sub.id}/videos?page=1`)
+                .then(res => {
                     if (!res.ok) return [];
-                    const data = await res.json();
-                    return data.slice(0, 2);
-                } catch { return []; }
-            });
-            const feed = [].concat(...results).sort((a, b) => b.published - a.published);
-            if (feed.length < 10) {
-                try {
-                    const tr = await (await Utils.fetchDedup(`${TinyTube.App.api}/trending`)).json();
-                    if (Array.isArray(tr)) feed.push(...tr.slice(0, 10));
-                } catch {}
-            }
-            TinyTube.UI.renderGrid(feed);
-        } catch { Feed.fetch("/trending"); }
+                    return res.json().then(data => data.slice(0, 2));
+                })
+                .catch(() => []);
+        })
+            .then(results => {
+                const feed = [].concat(...results).sort((a, b) => b.published - a.published);
+                if (feed.length < 10) {
+                    return Utils.fetchDedup(`${TinyTube.App.api}/trending`)
+                        .then(res => res.json())
+                        .then(tr => {
+                            if (Array.isArray(tr)) feed.push(...tr.slice(0, 10));
+                            return feed;
+                        })
+                        .catch(() => feed);
+                }
+                return feed;
+            })
+            .then(feed => {
+                TinyTube.UI.renderGrid(feed);
+            })
+            .catch(() => Feed.fetch("/trending"));
     },
-    fetch: async (endpoint) => {
+    fetch: (endpoint) => {
         if (!TinyTube.App.api) return;
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div></div>';
-        try {
-            const res = await Utils.fetchDedup(`${TinyTube.App.api}${endpoint}`);
-            if (!res.ok) throw new Error();
-            const data = await res.json();
-            const rendered = TinyTube.UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
-            return { ok: true, hasItems: rendered };
-        } catch {
-            el("grid-container").innerHTML = '<div class="network-error"><h3>Connection Failed</h3><p>Perditum may be busy.</p></div>';
-            return { ok: false, hasItems: false };
-        }
+        return Utils.fetchDedup(`${TinyTube.App.api}${endpoint}`)
+            .then(res => {
+                if (!res.ok) throw new Error();
+                return res.json();
+            })
+            .then(data => {
+                const rendered = TinyTube.UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
+                return { ok: true, hasItems: rendered };
+            })
+            .catch(() => {
+                el("grid-container").innerHTML = '<div class="network-error"><h3>Connection Failed</h3><p>Perditum may be busy.</p></div>';
+                return { ok: false, hasItems: false };
+            });
     },
     renderSubs: () => {
         el("section-title").textContent = "Subscriptions";
@@ -57,44 +67,50 @@ const Feed = {
         })));
     },
     // Channel Page View
-    loadChannel: async (channelId, channelName) => {
+    loadChannel: (channelId, channelName) => {
         if (!channelId) return;
         TinyTube.App.currentChannelId = channelId;
         el("section-title").textContent = channelName || "Channel Videos";
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Loading channel...</p></div>';
-        try {
-            const res = await Utils.fetchDedup(`${TinyTube.App.api}/channels/${channelId}/videos?page=1`);
-            if (!res.ok) throw new Error('Channel fetch failed');
-            const data = await res.json();
-            TinyTube.UI.renderGrid(Array.isArray(data) ? data : (data.videos || data.items || []));
-        } catch (e) {
-            el("grid-container").innerHTML = '<div class="network-error"><h3>Failed to Load Channel</h3><p>Try again later.</p></div>';
-        }
+        return Utils.fetchDedup(`${TinyTube.App.api}/channels/${channelId}/videos?page=1`)
+            .then(res => {
+                if (!res.ok) throw new Error('Channel fetch failed');
+                return res.json();
+            })
+            .then(data => {
+                TinyTube.UI.renderGrid(Array.isArray(data) ? data : (data.videos || data.items || []));
+            })
+            .catch(() => {
+                el("grid-container").innerHTML = '<div class="network-error"><h3>Failed to Load Channel</h3><p>Try again later.</p></div>';
+            });
     },
     // Playlist Support
-    loadPlaylist: async (playlistId, playlistTitle) => {
+    loadPlaylist: (playlistId, playlistTitle) => {
         if (!playlistId) return;
         TinyTube.App.currentPlaylistId = playlistId;
         el("section-title").textContent = playlistTitle || "Playlist";
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Loading playlist...</p></div>';
-        try {
-            const res = await Utils.fetchDedup(`${TinyTube.App.api}/playlists/${playlistId}`);
-            if (!res.ok) throw new Error('Playlist fetch failed');
-            const data = await res.json();
-            TinyTube.UI.renderGrid(data.videos || data.items || []);
-        } catch (e) {
-            el("grid-container").innerHTML = '<div class="network-error"><h3>Failed to Load Playlist</h3><p>Try again later.</p></div>';
-        }
+        return Utils.fetchDedup(`${TinyTube.App.api}/playlists/${playlistId}`)
+            .then(res => {
+                if (!res.ok) throw new Error('Playlist fetch failed');
+                return res.json();
+            })
+            .then(data => {
+                TinyTube.UI.renderGrid(data.videos || data.items || []);
+            })
+            .catch(() => {
+                el("grid-container").innerHTML = '<div class="network-error"><h3>Failed to Load Playlist</h3><p>Try again later.</p></div>';
+            });
     },
     // Trending Categories
-    loadTrendingCategory: async (category) => {
+    loadTrendingCategory: (category) => {
         TinyTube.App.currentTrendingCategory = category;
         const title = category ? `Trending: ${category}` : "Trending";
         el("section-title").textContent = title;
         TrendingTabs.show();
         TrendingTabs.setActive(category);
         const endpoint = category ? `/trending?type=${category}` : '/trending';
-        await Feed.fetch(endpoint);
+        return Feed.fetch(endpoint);
     },
     // Watch Later View
     renderWatchLater: () => {
