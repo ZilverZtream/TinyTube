@@ -517,43 +517,54 @@ window.onload = () => {
     DB.loadProfile();
 
     // --- STARTUP SEQUENCE ---
-    el("backend-status").textContent = "Connecting...";
-    return swPromise
-        .then(() => Network.connect())
-        .then(() => {
-            const updateBackendStatus = (cipherStatus) => {
-                const apiLabel = App.api === CONFIG.PRIMARY_API ? "Perditum" : "Custom";
-                el("backend-status").textContent = `API: ${apiLabel} | Cipher: ${cipherStatus}`;
-            };
+    let backendReady = false;
+    let cipherStatus = "default (processing...)";
+    const updateBackendStatus = (status) => {
+        const apiLabel = App.api === CONFIG.PRIMARY_API ? "Perditum" : "Custom";
+        el("backend-status").textContent = `API: ${apiLabel} | Cipher: ${status}`;
+    };
+    const setCipherStatus = (status) => {
+        cipherStatus = status;
+        if (backendReady) {
+            updateBackendStatus(cipherStatus);
+        } else {
+            el("backend-status").textContent = `Connecting... | Cipher: ${cipherStatus}`;
+        }
+    };
 
-            updateBackendStatus("checking...");
+    CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
+    setCipherStatus(cipherStatus);
+
+    const cipherTimeoutMs = 4000;
+    let cipherResolved = false;
+    const cipherTimeout = setTimeout(() => {
+        if (!cipherResolved) {
             CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
+            setCipherStatus("default (timeout)");
+        }
+    }, cipherTimeoutMs);
 
-            requestAnimationFrame(() => {
-                const cipherTimeoutMs = 4000;
-                let cipherResolved = false;
-                const cipherTimeout = setTimeout(() => {
-                    if (!cipherResolved) {
-                        CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
-                        updateBackendStatus("default (timeout)");
-                    }
-                }, cipherTimeoutMs);
-
-                CipherBreaker.run()
-                    .then((freshCipher) => {
-                        cipherResolved = true;
-                        clearTimeout(cipherTimeout);
-                        CONFIG.CIPHER_SEQUENCE = freshCipher;
-                        updateBackendStatus("updated");
-                    })
-                    .catch((error) => {
-                        cipherResolved = true;
-                        clearTimeout(cipherTimeout);
-                        console.log("Cipher breaker failed:", error?.message || error);
-                        updateBackendStatus("default (error)");
-                    });
-            });
+    CipherBreaker.run()
+        .then((freshCipher) => {
+            cipherResolved = true;
+            clearTimeout(cipherTimeout);
+            CONFIG.CIPHER_SEQUENCE = freshCipher;
+            setCipherStatus("updated");
+        })
+        .catch((error) => {
+            cipherResolved = true;
+            clearTimeout(cipherTimeout);
+            console.log("Cipher breaker failed:", error?.message || error);
+            setCipherStatus("default (error)");
         });
+
+    const connectPromise = Network.connect()
+        .then(() => {
+            backendReady = true;
+            updateBackendStatus(cipherStatus);
+        });
+
+    return swPromise.then(() => connectPromise);
 };
 
 // --- CLEANUP ON EXIT ---
