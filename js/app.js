@@ -101,6 +101,20 @@ const App = {
 
 TinyTube.App = App;
 
+function clearServiceWorkerCache() {
+    if (!('serviceWorker' in navigator)) {
+        return;
+    }
+
+    navigator.serviceWorker.ready
+        .then((registration) => {
+            if (registration.active) {
+                registration.active.postMessage({ type: "CLEAR_CACHE" });
+            }
+        })
+        .catch(() => {});
+}
+
 App.actions = {
     menuSelect: () => {
         // Hide category tabs and filters when switching views
@@ -151,6 +165,7 @@ App.actions = {
         }
     },
     saveSettings: () => {
+        const previousCustomBase = SafeStorage.getItem("customBase");
         const name = el("profile-name-input").value.trim();
         const api = el("api-input").value.trim();
         const maxRes = el("max-res-select").value;
@@ -167,6 +182,7 @@ App.actions = {
         } else {
             SafeStorage.removeItem("customBase");
         }
+        const nextCustomBase = SafeStorage.getItem("customBase");
         if (maxRes) SafeStorage.setItem("tt_max_res", maxRes);
         const oldAutoplay = App.autoplayEnabled;
         App.autoplayEnabled = autoplayEnabled;
@@ -181,6 +197,10 @@ App.actions = {
         App.streamCache.map.clear();
         App.subsCache = null;
         App.subsCacheId = null;
+
+        if (previousCustomBase !== nextCustomBase) {
+            clearServiceWorkerCache();
+        }
 
         // Reconnect to API and reload feed
         Network.connect();
@@ -199,6 +219,7 @@ App.actions = {
         App.streamCache.map.clear();
         App.subsCache = null;
         App.subsCacheId = null;
+        clearServiceWorkerCache();
 
         DB.loadProfile();
 

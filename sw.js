@@ -1,24 +1,30 @@
 // TinyTube Service Worker for API Caching
 // Cache API responses for 5-10 minutes to improve performance
 
-const CACHE_NAME = 'tinytube-api-cache-v1';
+const CACHE_NAME = 'tinytube-api-cache-v2';
 const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes in milliseconds
 const MAX_CACHE_ENTRIES = 50; // Limit cache size to prevent storage bloat
 
 // API patterns to cache
 const CACHEABLE_APIS = [
     'trending',
-    'search',
-    'popular',
-    'feed',
-    '/api/v1/trending',
-    '/api/v1/popular',
-    '/api/v1/search'
+    '/api/v1/trending'
 ];
 
 // Check if URL should be cached
 function shouldCache(url) {
     return CACHEABLE_APIS.some(pattern => url.includes(pattern));
+}
+
+function isSafeToCache(request) {
+    return !request.headers.has('Authorization') && !request.headers.has('Cookie');
+}
+
+function buildCacheKey(request) {
+    const url = new URL(request.url);
+    const acceptLanguage = request.headers.get('Accept-Language') || '';
+    url.searchParams.set('__sw_accept_language', acceptLanguage);
+    return new Request(url.toString(), { method: 'GET' });
 }
 
 // Enforce cache size limit using LRU strategy
@@ -64,22 +70,23 @@ self.addEventListener('fetch', (event) => {
     const url = request.url;
 
     // Only cache GET requests to API endpoints
-    if (request.method !== 'GET' || !shouldCache(url)) {
+    if (request.method !== 'GET' || !shouldCache(url) || !isSafeToCache(request)) {
         return;
     }
 
     event.respondWith(
         caches.open(CACHE_NAME).then(async (cache) => {
+            const cacheKey = buildCacheKey(request);
             try {
                 // Try to get from cache first
-                const cachedResponse = await cache.match(request);
+                const cachedResponse = await cache.match(cacheKey);
 
                 if (cachedResponse) {
                     // Check if cache is still fresh
                     const cachedTime = cachedResponse.headers.get('sw-cached-time');
                     if (!cachedTime || Number.isNaN(parseInt(cachedTime, 10))) {
                         console.log('Service Worker: Cache timestamp missing/invalid, invalidating:', url);
-                        await cache.delete(request);
+                        await cache.delete(cacheKey);
                     } else {
                         const age = Date.now() - parseInt(cachedTime, 10);
                         if (age < CACHE_DURATION) {
@@ -98,7 +105,7 @@ self.addEventListener('fetch', (event) => {
                                                 statusText: responseClone.statusText,
                                                 headers: headers
                                             });
-                                            cache.put(request, newResponse);
+                                            cache.put(cacheKey, newResponse);
                                         });
                                     }
                                 })
@@ -127,7 +134,7 @@ self.addEventListener('fetch', (event) => {
                             statusText: responseClone.statusText,
                             headers: headers
                         });
-                        cache.put(request, newResponse);
+                        cache.put(cacheKey, newResponse);
                         // Enforce cache size limit after adding new entry
                         enforceCacheLimit(cache);
                     });
@@ -137,7 +144,7 @@ self.addEventListener('fetch', (event) => {
             } catch (error) {
                 console.log('Service Worker: Fetch failed, trying cache:', error);
                 // If network fails, try cache even if expired
-                const cachedResponse = await cache.match(request);
+                const cachedResponse = await cache.match(cacheKey);
                 if (cachedResponse) {
                     return cachedResponse;
                 }
