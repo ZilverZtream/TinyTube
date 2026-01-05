@@ -5,7 +5,7 @@
     <content src="index.html"/>
     <name>TinyTube Pro</name>
     
-    <icon src="icon.png"/>
+    <icon src="default.png"/>
     
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
     <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
