@@ -549,7 +549,13 @@ const UI = {
                     }
 
                     const durationBadge = div.querySelector('.duration-badge');
-                    const rawCount = item.videoCount ?? item.itemCount ?? item.videoCountText ?? (Array.isArray(item.videos) ? item.videos.length : null);
+                    const rawCount = item.videoCount != null
+                        ? item.videoCount
+                        : item.itemCount != null
+                            ? item.itemCount
+                            : item.videoCountText != null
+                                ? item.videoCountText
+                                : (Array.isArray(item.videos) ? item.videos.length : null);
                     let countText = "";
                     if (typeof rawCount === "number") countText = `${rawCount} videos`;
                     else if (typeof rawCount === "string") countText = rawCount;
@@ -691,7 +697,13 @@ const UI = {
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else { img.src = thumbUrl; }
                         tc.appendChild(img);
-                        const rawCount = item.videoCount ?? item.itemCount ?? item.videoCountText ?? (Array.isArray(item.videos) ? item.videos.length : null);
+                        const rawCount = item.videoCount != null
+                            ? item.videoCount
+                            : item.itemCount != null
+                                ? item.itemCount
+                                : item.videoCountText != null
+                                    ? item.videoCountText
+                                    : (Array.isArray(item.videos) ? item.videos.length : null);
                         let countText = "";
                         if (typeof rawCount === "number") countText = `${rawCount} videos`;
                         else if (typeof rawCount === "string") countText = rawCount;
