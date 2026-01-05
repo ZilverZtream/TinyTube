@@ -1026,6 +1026,11 @@ function setupRemote() {
                 App.focus.area = "grid";
                 UI.updateFocus();
             }
+            if (e.keyCode === 10009) {
+                el("search-input").classList.add("hidden");
+                App.focus.area = "menu";
+                UI.updateFocus();
+            }
             return;
         }
 
@@ -1092,15 +1097,10 @@ function setupRemote() {
                 }
                 break;
             case 10009: // BACK
-                if (App.focus.area === "search") {
-                    App.focus.area = "menu";
-                    el("search-input").classList.add("hidden");
-                } else {
-                    App.exitCounter++;
-                    if (App.exitCounter >= 2) {
-                        if (typeof tizen !== 'undefined') tizen.application.getCurrentApplication().exit();
-                    } else Utils.toast("Back Again to Exit");
-                }
+                App.exitCounter++;
+                if (App.exitCounter >= 2) {
+                    if (typeof tizen !== 'undefined') tizen.application.getCurrentApplication().exit();
+                } else Utils.toast("Back Again to Exit");
                 break;
         }
         UI.updateFocus();
