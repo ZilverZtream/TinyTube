@@ -103,6 +103,7 @@ const App = {
     subsCache: null,
     subsCacheId: null,
     lazyObserver: null,
+    supportsSmoothScroll: true,
     // Player state
     currentVideoId: null,
     currentVideoData: null, // Full video metadata for info overlay
@@ -582,7 +583,16 @@ const UI = {
             const card = el(`card-${App.focus.index}`);
             if (card) {
                 card.classList.add("focused");
-                card.scrollIntoView({ block: "center", behavior: "smooth" });
+                try {
+                    if (App.supportsSmoothScroll) {
+                        card.scrollIntoView({ block: "center", behavior: "smooth" });
+                    } else {
+                        card.scrollIntoView(false);
+                    }
+                } catch (e) {
+                    App.supportsSmoothScroll = false;
+                    card.scrollIntoView(false);
+                }
                 const item = App.items[App.focus.index];
                 if (item && item.type !== "channel" && !item.deArrowChecked) {
                     UI.fetchDeArrow(item, App.focus.index);
