@@ -30,8 +30,19 @@ const CONFIG = {
     CIPHER_CACHE_KEY: "tinytube_cipher_cache",
     CIPHER_CACHE_TTL: 24 * 60 * 60 * 1000,
     // Default Cipher (Fallback if Breaker fails)
-    CIPHER_SEQUENCE: "r,s3", 
-    DEFAULT_CIPHER: "r,s3"
+    CIPHER_SEQUENCE: "r,s3",
+    DEFAULT_CIPHER: "r,s3",
+    // UI and Performance Constants
+    RENDER_INTERVAL_MS: 300,
+    RENDER_INTERVAL_FAST_MS: 50,
+    TOAST_DURATION_MS: 3000,
+    LAZY_OBSERVER_MARGIN_PX: 100,
+    DEARROW_DEBOUNCE_MS: 300,
+    SPONSOR_FETCH_TIMEOUT: 5000,
+    INFO_KEY_LONG_PRESS_MS: 600,
+    HUD_AUTO_HIDE_MS: 4000,
+    MAX_PLAYER_ERROR_RETRIES: 3,
+    LOCALSTORAGE_QUOTA_EXCEEDED: "QuotaExceededError"
 };
 
 // --- O(1) LRU CACHE ---
@@ -66,22 +77,24 @@ const App = {
     sponsorSegs: [],
     lastSkippedSeg: null,
     exitCounter: 0,
-    
+
     deArrowCache: new LRUCache(200),
     streamCache: new LRUCache(50),
     subsCache: null,
     subsCacheId: null,
-    
+
     pendingDeArrow: {},
     pendingFetches: {},
     renderTimer: null,
+    renderAnimationFrame: null,
     lazyObserver: null,
     supportsSmoothScroll: true,
     lastFocused: null,
-    
+
     currentVideoId: null,
     currentVideoData: null,
     currentStreamUrl: null,
+    currentVideoLoadId: 0,
     upNext: [],
     autoplayEnabled: false,
     playbackSpeedIdx: 0,
@@ -94,15 +107,56 @@ const App = {
     hudTimer: null,
     lastRenderSec: null,
     lastRenderDuration: null,
-    
+    playerErrorRetries: 0,
+
     playerElements: null,
+    cachedElements: null,
     watchHistory: null,
-    
+
     activeLayer: "NONE",
     playerControls: { active: false, index: 0 }
 };
 
 const el = (id) => document.getElementById(id);
+
+// --- SAFE STORAGE WRAPPER ---
+const SafeStorage = {
+    setItem: (key, value) => {
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (e) {
+            if (e.name === CONFIG.LOCALSTORAGE_QUOTA_EXCEEDED || e.name === 'QuotaExceededError') {
+                console.log(`localStorage quota exceeded for key: ${key}`);
+                // Try to clear old cache entries
+                try {
+                    const oldCipherKey = CONFIG.CIPHER_CACHE_KEY;
+                    if (key !== oldCipherKey) localStorage.removeItem(oldCipherKey);
+                } catch (cleanupError) {}
+            } else {
+                console.log(`localStorage error: ${e.message}`);
+            }
+            return false;
+        }
+    },
+    getItem: (key, fallback = null) => {
+        try {
+            return localStorage.getItem(key) || fallback;
+        } catch (e) {
+            console.log(`localStorage read error for ${key}: ${e.message}`);
+            return fallback;
+        }
+    },
+    removeItem: (key) => {
+        try {
+            localStorage.removeItem(key);
+            return true;
+        } catch (e) {
+            console.log(`localStorage remove error for ${key}: ${e.message}`);
+            return false;
+        }
+    }
+};
 
 // --- 1. UTILS ---
 const Utils = {
@@ -130,10 +184,11 @@ const Utils = {
         });
     },
     fetchDedup: async (url, options = {}, timeout = CONFIG.TIMEOUT) => {
-        if (App.pendingFetches[url]) return App.pendingFetches[url];
+        const cacheKey = url + (Object.keys(options).length ? '|' + JSON.stringify(options) : '');
+        if (App.pendingFetches[cacheKey]) return App.pendingFetches[cacheKey];
         const promise = Utils.fetchWithTimeout(url, options, timeout)
-            .finally(() => { delete App.pendingFetches[url]; });
-        App.pendingFetches[url] = promise;
+            .finally(() => { delete App.pendingFetches[cacheKey]; });
+        App.pendingFetches[cacheKey] = promise;
         return promise;
     },
     processQueue: async (items, limit, asyncFn) => {
@@ -154,11 +209,14 @@ const Utils = {
     },
     isValidUrl: (s) => { try { return s.startsWith("http"); } catch { return false; } },
     toast: (msg) => {
-        const t = el("toast");
+        if (!App.cachedElements) App.cachedElements = {};
+        if (!App.cachedElements.toast) App.cachedElements.toast = el("toast");
+        const t = App.cachedElements.toast;
+        if (!t) return;
         t.textContent = msg;
         t.classList.remove("hidden");
         clearTimeout(t._timer);
-        t._timer = setTimeout(() => t.classList.add("hidden"), 3000);
+        t._timer = setTimeout(() => t.classList.add("hidden"), CONFIG.TOAST_DURATION_MS);
     },
     formatTime: (sec) => {
         if (!sec || isNaN(sec)) return "0:00";
@@ -191,7 +249,7 @@ const Utils = {
     findSegment: (time) => {
         let l = 0, r = App.sponsorSegs.length - 1;
         while (l <= r) {
-            const m = (l + r) >>> 1;
+            const m = Math.floor((l + r) / 2);
             const s = App.sponsorSegs[m];
             if (time >= s.segment[0] && time < s.segment[1]) return s;
             if (time < s.segment[0]) r = m - 1;
@@ -216,7 +274,7 @@ const Utils = {
         return 0;
     },
     getPreferredMaxResolution: () => {
-        const stored = localStorage.getItem("tt_max_res");
+        const stored = SafeStorage.getItem("tt_max_res");
         const parsed = parseInt(stored, 10);
         const allowed = [360, 480, 720, 1080];
         if (allowed.includes(parsed)) return parsed;
@@ -283,27 +341,19 @@ const Cipher = {
 const CipherBreaker = {
     cache: null,
     getCache: () => {
-        try {
-            const cached = Utils.safeParse(localStorage.getItem(CONFIG.CIPHER_CACHE_KEY), null);
-            if (cached && cached.seq && cached.expiresAt && cached.expiresAt > Date.now()) {
-                CipherBreaker.cache = cached.seq;
-                return cached.seq;
-            }
-        } catch (e) {
-            console.log("CipherBreaker cache read fail: " + e.message);
+        const cached = Utils.safeParse(SafeStorage.getItem(CONFIG.CIPHER_CACHE_KEY), null);
+        if (cached && cached.seq && cached.expiresAt && cached.expiresAt > Date.now()) {
+            CipherBreaker.cache = cached.seq;
+            return cached.seq;
         }
         return null;
     },
     setCache: (seq) => {
         CipherBreaker.cache = seq;
-        try {
-            localStorage.setItem(CONFIG.CIPHER_CACHE_KEY, JSON.stringify({
-                seq,
-                expiresAt: Date.now() + CONFIG.CIPHER_CACHE_TTL
-            }));
-        } catch (e) {
-            console.log("CipherBreaker cache write fail: " + e.message);
-        }
+        SafeStorage.setItem(CONFIG.CIPHER_CACHE_KEY, JSON.stringify({
+            seq,
+            expiresAt: Date.now() + CONFIG.CIPHER_CACHE_TTL
+        }));
     },
     proxyUrl: (target) => {
         if (!CONFIG.CIPHER_PROXY) return target;
@@ -509,28 +559,28 @@ const Extractor = {
 // --- 3. LOCAL DB ---
 const DB = {
     loadProfile: () => {
-        App.profileId = parseInt(localStorage.getItem("tt_pid") || "0");
-        const names = Utils.safeParse(localStorage.getItem("tt_pnames"), ["User 1", "User 2", "User 3"]);
+        App.profileId = parseInt(SafeStorage.getItem("tt_pid", "0"));
+        const names = Utils.safeParse(SafeStorage.getItem("tt_pnames"), ["User 1", "User 2", "User 3"]);
         el("p-name").textContent = names[App.profileId];
         el("modal-profile-id").textContent = `#${App.profileId + 1}`;
         el("profile-name-input").value = names[App.profileId];
-        el("api-input").value = localStorage.getItem("customBase") || "";
+        el("api-input").value = SafeStorage.getItem("customBase", "");
         el("max-res-select").value = Utils.getPreferredMaxResolution().toString();
-        App.autoplayEnabled = localStorage.getItem("tt_autoplay") === "true";
+        App.autoplayEnabled = SafeStorage.getItem("tt_autoplay") === "true";
         el("autoplay-toggle").checked = App.autoplayEnabled;
         App.subsCache = null;
         App.subsCacheId = null;
-        App.watchHistory = Utils.safeParse(localStorage.getItem(`tt_history_${App.profileId}`), {});
+        App.watchHistory = Utils.safeParse(SafeStorage.getItem(`tt_history_${App.profileId}`), {});
     },
     saveProfileName: (name) => {
-        const names = Utils.safeParse(localStorage.getItem("tt_pnames"), ["User 1", "User 2", "User 3"]);
+        const names = Utils.safeParse(SafeStorage.getItem("tt_pnames"), ["User 1", "User 2", "User 3"]);
         names[App.profileId] = name;
-        localStorage.setItem("tt_pnames", JSON.stringify(names));
+        SafeStorage.setItem("tt_pnames", JSON.stringify(names));
         DB.loadProfile();
     },
     getSubs: () => {
         if (App.subsCache && App.subsCacheId === App.profileId) return App.subsCache;
-        App.subsCache = Utils.safeParse(localStorage.getItem(`tt_subs_${App.profileId}`), []);
+        App.subsCache = Utils.safeParse(SafeStorage.getItem(`tt_subs_${App.profileId}`), []);
         App.subsCacheId = App.profileId;
         return App.subsCache;
     },
@@ -545,7 +595,7 @@ const DB = {
             subs.push({ id, name, thumb });
             Utils.toast(`Subscribed: ${name}`);
         }
-        localStorage.setItem(`tt_subs_${App.profileId}`, JSON.stringify(subs));
+        SafeStorage.setItem(`tt_subs_${App.profileId}`, JSON.stringify(subs));
         App.subsCache = subs;
         if (App.view === "PLAYER") HUD.updateSubBadge(!exists);
         if (App.menuIdx === 1) Feed.renderSubs();
@@ -565,7 +615,7 @@ const DB = {
                 }
             }
         }
-        localStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
+        SafeStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
     },
     getPosition: (videoId) => {
         if (!videoId || !App.watchHistory[videoId]) return 0;
@@ -574,7 +624,7 @@ const DB = {
     clearPosition: (videoId) => {
         if (videoId && App.watchHistory[videoId]) {
             delete App.watchHistory[videoId];
-            localStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
+            SafeStorage.setItem(`tt_history_${App.profileId}`, JSON.stringify(App.watchHistory));
         }
     }
 };
@@ -582,9 +632,9 @@ const DB = {
 // --- 4. NETWORK ---
 const Network = {
     connect: async () => {
-        const custom = localStorage.getItem("customBase");
-        if (custom && Utils.isValidUrl(custom)) { 
-            App.api = custom; 
+        const custom = SafeStorage.getItem("customBase");
+        if (custom && Utils.isValidUrl(custom)) {
+            App.api = custom;
             el("backend-status").textContent = "API: Custom";
         } else {
             App.api = CONFIG.PRIMARY_API;
@@ -661,7 +711,7 @@ const UI = {
                     }
                 }
             });
-        }, { rootMargin: "200px" });
+        }, { rootMargin: `${CONFIG.LAZY_OBSERVER_MARGIN_PX}px` });
     },
     // FIX: Named function to prevent closure memory leaks
     handleImgError: (e) => {
@@ -676,7 +726,9 @@ const UI = {
         if (App.lazyObserver) App.lazyObserver.disconnect();
         grid.textContent = "";
         for (const key in App.pendingDeArrow) {
-            clearTimeout(App.pendingDeArrow[key]);
+            const op = App.pendingDeArrow[key];
+            if (op && op.timer) clearTimeout(op.timer);
+            if (op) op.cancelled = true;
             delete App.pendingDeArrow[key];
         }
         if (App.items.length === 0) {
@@ -791,16 +843,28 @@ const UI = {
         const vId = Utils.getVideoId(item);
         if (!vId) return;
         if (App.deArrowCache.has(vId)) { UI.applyDeArrow(App.deArrowCache.get(vId), idx, vId); return; }
-        if (App.pendingDeArrow[vId]) clearTimeout(App.pendingDeArrow[vId]);
-        App.pendingDeArrow[vId] = setTimeout(() => {
-            Utils.fetchDedup(`${CONFIG.DEARROW_API}?videoID=${vId}`, {}, 5000)
-                .then(r => r.json())
+        if (App.pendingDeArrow[vId]) {
+            if (App.pendingDeArrow[vId].timer) clearTimeout(App.pendingDeArrow[vId].timer);
+            if (App.pendingDeArrow[vId].cancelled) App.pendingDeArrow[vId].cancelled = true;
+        }
+        const operation = { timer: null, cancelled: false };
+        App.pendingDeArrow[vId] = operation;
+        operation.timer = setTimeout(() => {
+            if (operation.cancelled) return;
+            Utils.fetchDedup(`${CONFIG.DEARROW_API}?videoID=${vId}`, {}, CONFIG.SPONSOR_FETCH_TIMEOUT)
+                .then(r => {
+                    if (operation.cancelled) return;
+                    return r.json();
+                })
                 .then(d => {
+                    if (operation.cancelled) return;
                     App.deArrowCache.set(vId, d);
                     UI.applyDeArrow(d, idx, vId);
                     delete App.pendingDeArrow[vId];
-                }).catch(() => delete App.pendingDeArrow[vId]);
-        }, 300);
+                }).catch(() => {
+                    if (!operation.cancelled) delete App.pendingDeArrow[vId];
+                });
+        }, CONFIG.DEARROW_DEBOUNCE_MS);
     },
     applyDeArrow: (d, idx, originalId) => {
         if (!App.items[idx]) return;
@@ -847,7 +911,7 @@ const Player = {
         if (Comments.isOpen()) Comments.close();
         el("video-info-overlay").classList.add("hidden");
         list.textContent = "";
-        const currentLang = localStorage.getItem(Player.captionLangKey()) || "";
+        const currentLang = SafeStorage.getItem(Player.captionLangKey(), "");
         App.captionTracks.forEach(track => {
             if (!track) return;
             const label = track.label || track.srclang || "Captions";
@@ -858,7 +922,7 @@ const Player = {
             else {
                 if (track.srclang === currentLang) option.classList.add("active");
                 option.addEventListener("click", () => {
-                    localStorage.setItem(Player.captionLangKey(), track.srclang);
+                    SafeStorage.setItem(Player.captionLangKey(), track.srclang);
                     Player.setCaptionMode(track.srclang, "showing");
                     Captions.close();
                 });
@@ -871,7 +935,7 @@ const Player = {
     setupCaptions: (data) => {
         Player.clearCaptions();
         if (!data || !Array.isArray(data.captions)) return;
-        const storedLang = localStorage.getItem(Player.captionLangKey()) || "";
+        const storedLang = SafeStorage.getItem(Player.captionLangKey(), "");
         const captions = data.captions.map(c => {
             const src = c.url || c.vttUrl || c.baseUrl || c.caption_url;
             return src ? { src, srclang: c.language_code || c.srclang || "", label: c.label || c.name || "Subtitles" } : null;
@@ -896,9 +960,9 @@ const Player = {
             App.captionTracks.forEach(t => { if (t.track) t.track.mode = "hidden"; });
             Utils.toast("Captions off");
         } else {
-            let lang = localStorage.getItem(Player.captionLangKey()) || App.captionTracks[0].srclang || "";
+            let lang = SafeStorage.getItem(Player.captionLangKey(), "") || (App.captionTracks[0] && App.captionTracks[0].srclang) || "";
             if (lang) {
-                localStorage.setItem(Player.captionLangKey(), lang);
+                SafeStorage.setItem(Player.captionLangKey(), lang);
                 Player.setCaptionMode(lang, "showing");
                 Utils.toast(`Captions: ${lang}`);
             }
@@ -942,7 +1006,8 @@ const Player = {
         App.currentStreamUrl = null;
         App.lastRenderSec = null;
         App.upNext = [];
-        
+        App.playerErrorRetries = 0;
+
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
         ScreenSaver.disable();
@@ -950,6 +1015,7 @@ const Player = {
         const vId = Utils.getVideoId(item);
         if(!vId) { Utils.toast("Error: No ID"); return; }
         App.currentVideoId = vId;
+        App.currentVideoLoadId++;
         
         el("player-title").textContent = item.title;
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
@@ -969,10 +1035,11 @@ const Player = {
         if(posterUrl) p.poster = posterUrl;
         App.playerElements.bufferingSpinner.classList.remove("hidden");
         App.sponsorSegs = [];
-        Utils.fetchWithTimeout(`${CONFIG.SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo"]`, {}, 5000)
-            .then(r=>r.json()).then(s => { if(Array.isArray(s)) App.sponsorSegs=s.sort((a,b)=>a.segment[0]-b.segment[0]); })
+        const loadId = App.currentVideoLoadId;
+        Utils.fetchWithTimeout(`${CONFIG.SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo"]`, {}, CONFIG.SPONSOR_FETCH_TIMEOUT)
+            .then(r=>r.json()).then(s => { if(Array.isArray(s) && loadId === App.currentVideoLoadId) App.sponsorSegs=s.sort((a,b)=>a.segment[0]-b.segment[0]); })
             .catch(()=>{});
-        const isCurrent = () => App.view === "PLAYER" && App.currentVideoId === vId;
+        const isCurrent = () => App.view === "PLAYER" && App.currentVideoId === vId && loadId === App.currentVideoLoadId;
         let streamUrl = null;
         
         if (App.api) {
@@ -1055,7 +1122,7 @@ const Player = {
         p.onplay = () => {
             App.playerElements.bufferingSpinner.classList.add("hidden");
             show();
-            if (!App.renderTimer && App.playerMode === "BYPASS") Player.startRenderLoop();
+            if (!App.renderTimer && !App.renderAnimationFrame && App.playerMode === "BYPASS") Player.startRenderLoop();
         };
         p.onpause = () => {
             show();
@@ -1064,7 +1131,18 @@ const Player = {
         p.onseeked = show;
         p.onwaiting = () => App.playerElements.bufferingSpinner.classList.remove("hidden");
         p.onplaying = () => App.playerElements.bufferingSpinner.classList.add("hidden");
-        p.onerror = () => Player.enforce(App.currentVideoId);
+        p.onerror = () => {
+            App.playerErrorRetries++;
+            if (App.playerErrorRetries < CONFIG.MAX_PLAYER_ERROR_RETRIES) {
+                console.log(`Player error, retry ${App.playerErrorRetries}/${CONFIG.MAX_PLAYER_ERROR_RETRIES}`);
+                if (App.playerMode !== "ENFORCE") {
+                    Player.enforce(App.currentVideoId);
+                }
+            } else {
+                console.log("Player error: max retries exceeded");
+                Player.showError("Playback Failed", "Unable to play video after multiple attempts.");
+            }
+        };
         p.onended = () => {
             if (!App.autoplayEnabled) return;
             const next = App.upNext && App.upNext[0];
@@ -1075,28 +1153,60 @@ const Player = {
         Player.stopRenderLoop();
         App.lastRenderSec = null;
         App.lastRenderDuration = null;
-        App.renderTimer = setTimeout(Player.renderLoop, 300);
+        if (window.requestAnimationFrame) {
+            Player.renderLoopRAF();
+        } else {
+            App.renderTimer = setTimeout(Player.renderLoop, CONFIG.RENDER_INTERVAL_MS);
+        }
     },
     stopRenderLoop: () => {
         if (App.renderTimer) clearTimeout(App.renderTimer);
+        if (App.renderAnimationFrame) cancelAnimationFrame(App.renderAnimationFrame);
         App.renderTimer = null;
+        App.renderAnimationFrame = null;
     },
-    updateHud: (p) => {
+    updateHud: (p, forceTextUpdate = false) => {
         const currentSec = Math.floor(p.currentTime);
         const duration = p.duration;
-        if (currentSec === App.lastRenderSec && duration === App.lastRenderDuration) return;
-        App.lastRenderSec = currentSec;
-        App.lastRenderDuration = duration;
         const pe = App.playerElements;
         const hasFiniteDuration = isFinite(duration) && duration > 0;
+
+        // Always update progress bar for smooth animation
         if (hasFiniteDuration) {
             pe.progressFill.style.transform = `scaleX(${p.currentTime / duration})`;
         }
-        pe.currTime.textContent = Utils.formatTime(p.currentTime);
-        pe.totalTime.textContent = Utils.formatTime(duration);
-        if (hasFiniteDuration && p.buffered.length) {
-            pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / duration})`;
+
+        // Only update text when second changes or forced
+        if (forceTextUpdate || currentSec !== App.lastRenderSec || duration !== App.lastRenderDuration) {
+            App.lastRenderSec = currentSec;
+            App.lastRenderDuration = duration;
+            pe.currTime.textContent = Utils.formatTime(p.currentTime);
+            pe.totalTime.textContent = Utils.formatTime(duration);
+            if (hasFiniteDuration && p.buffered.length) {
+                pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / duration})`;
+            }
         }
+    },
+    renderLoopRAF: () => {
+        if (App.view !== "PLAYER") {
+            Player.stopRenderLoop();
+            return;
+        }
+        const p = App.playerElements.player;
+        if (App.playerMode === "ENFORCE" || p.paused) {
+            Player.stopRenderLoop();
+            return;
+        }
+        if (!isNaN(p.duration)) {
+            Player.updateHud(p, false);
+            const s = Utils.findSegment(p.currentTime);
+            if (s && s !== App.lastSkippedSeg) {
+                App.lastSkippedSeg = s;
+                p.currentTime = s.segment[1] + 0.1;
+                Utils.toast("Skipped");
+            } else if (!s) App.lastSkippedSeg = null;
+        }
+        App.renderAnimationFrame = requestAnimationFrame(Player.renderLoopRAF);
     },
     renderLoop: () => {
         if (App.view !== "PLAYER") {
@@ -1109,7 +1219,7 @@ const Player = {
             return;
         }
         if (!isNaN(p.duration)) {
-            Player.updateHud(p);
+            Player.updateHud(p, true);
             const s = Utils.findSegment(p.currentTime);
             if (s && s !== App.lastSkippedSeg) {
                 App.lastSkippedSeg = s;
@@ -1117,7 +1227,7 @@ const Player = {
                 Utils.toast("Skipped");
             } else if (!s) App.lastSkippedSeg = null;
         }
-        App.renderTimer = setTimeout(Player.renderLoop, 300);
+        App.renderTimer = setTimeout(Player.renderLoop, CONFIG.RENDER_INTERVAL_MS);
     },
     seek: (direction, accelerated = false) => {
         const p = App.playerElements.player;
@@ -1215,15 +1325,15 @@ App.actions = {
         const maxRes = el("max-res-select").value;
         const autoplayEnabled = el("autoplay-toggle").checked;
         if(name) DB.saveProfileName(name);
-        if(api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
-        else localStorage.removeItem("customBase");
-        if (maxRes) localStorage.setItem("tt_max_res", maxRes);
-        localStorage.setItem("tt_autoplay", autoplayEnabled ? "true" : "false");
+        if(api && Utils.isValidUrl(api)) SafeStorage.setItem("customBase", api);
+        else SafeStorage.removeItem("customBase");
+        if (maxRes) SafeStorage.setItem("tt_max_res", maxRes);
+        SafeStorage.setItem("tt_autoplay", autoplayEnabled ? "true" : "false");
         location.reload();
     },
     switchProfile: () => {
         App.profileId = (App.profileId + 1) % 3;
-        localStorage.setItem("tt_pid", App.profileId.toString());
+        SafeStorage.setItem("tt_pid", App.profileId.toString());
         DB.loadProfile();
         Utils.toast("Switched to Profile #" + (App.profileId + 1));
     }
@@ -1234,7 +1344,7 @@ const HUD = {
     show: () => {
         el("player-hud").classList.add("visible");
         if(App.hudTimer) clearTimeout(App.hudTimer);
-        App.hudTimer = setTimeout(() => el("player-hud").classList.remove("visible"), 4000);
+        App.hudTimer = setTimeout(() => el("player-hud").classList.remove("visible"), CONFIG.HUD_AUTO_HIDE_MS);
     },
     updateSubBadge: (isSubbed) => {
         const b = el("sub-badge");
@@ -1538,10 +1648,10 @@ function setupRemote() {
                 case 404: if (App.playerMode === "BYPASS") Player.cycleSpeed(); break;
                 case 405: Comments.open(); break;
                 case 406: const i=App.items[App.focus.index]; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); break;
-                case 457: 
-                    if(!App.infoKeyTimer) { 
-                        App.infoKeyHandled=false; 
-                        App.infoKeyTimer=setTimeout(()=>{ App.infoKeyHandled=true; App.infoKeyTimer=null; Player.toggleCaptions(); }, 600); 
+                case 457:
+                    if(!App.infoKeyTimer) {
+                        App.infoKeyHandled=false;
+                        App.infoKeyTimer=setTimeout(()=>{ App.infoKeyHandled=true; App.infoKeyTimer=null; Player.toggleCaptions(); }, CONFIG.INFO_KEY_LONG_PRESS_MS);
                     } break;
             }
             return;
