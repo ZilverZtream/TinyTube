@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="http://yourdomain.TinyTubePro" version="5.1.0" viewmodes="maximized">
-    <tizen:application id="yourid.TinyTubePro" package="yourid" required_version="2.3"/>
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="http://github.com/ZilverZtream/TinyTube" version="11.1.0" viewmodes="maximized">
+    <tizen:application id="ZilverZtrm.TinyTube" package="ZilverZtrm" required_version="2.3"/>
+    
     <content src="index.html"/>
-    <feature name="http://tizen.org/feature/screen.size.all"/>
-    <feature name="http://tizen.org/feature/network.internet"/>
+    <name>TinyTube Pro</name>
+    
+    <icon src="icon.png"/>
+    
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
     <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
     <tizen:privilege name="http://tizen.org/privilege/application.launch"/>
-    <access origin="*" subdomains="true"/>
-    <icon src="icon.png"/>
-    <name>TinyTube Pro</name>
+    
+    <feature name="http://tizen.org/feature/screen.size.all"/>
+    
+    <tizen:profile name="tv-samsung"/>
+    
+    <author href="https://github.com/ZilverZtream/TinyTube">ZilverZtream</author>
 </widget>
