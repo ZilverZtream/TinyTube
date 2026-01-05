@@ -375,6 +375,121 @@ const Utils = {
         // Browsers automatically handle compression negotiation (gzip, deflate, br)
         // Manually setting this header converts "Simple Request" to "Complex Request"
         // which forces an OPTIONS preflight, adding 200-500ms latency per request
+        const supportsFetchAbort = typeof fetch === 'function'
+            && typeof AbortController !== 'undefined'
+            && typeof AbortController.prototype !== 'undefined'
+            && typeof AbortController.prototype.abort === 'function';
+        if (!supportsFetchAbort) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const method = (options.method || 'GET').toUpperCase();
+                const originalSignal = options.signal;
+                let timedOut = false;
+                let abortHandler = null;
+                const cleanup = () => {
+                    if (abortHandler && originalSignal) {
+                        originalSignal.removeEventListener('abort', abortHandler);
+                    }
+                };
+                const timer = setTimeout(() => {
+                    timedOut = true;
+                    xhr.abort();
+                    cleanup();
+                    reject(new Error('Fetch timeout'));
+                }, timeout);
+
+                if (originalSignal) {
+                    abortHandler = () => {
+                        if (!timedOut) {
+                            clearTimeout(timer);
+                            xhr.abort();
+                            cleanup();
+                            if (typeof DOMException === 'function') {
+                                reject(new DOMException('Aborted', 'AbortError'));
+                            } else {
+                                const err = new Error('Aborted');
+                                err.name = 'AbortError';
+                                reject(err);
+                            }
+                        }
+                    };
+                    originalSignal.addEventListener('abort', abortHandler);
+                }
+
+                xhr.open(method, url, true);
+
+                if (options.credentials === 'include') {
+                    xhr.withCredentials = true;
+                }
+
+                if (options.headers) {
+                    if (typeof Headers !== 'undefined' && options.headers instanceof Headers) {
+                        options.headers.forEach((value, key) => xhr.setRequestHeader(key, value));
+                    } else if (Array.isArray(options.headers)) {
+                        options.headers.forEach(([key, value]) => xhr.setRequestHeader(key, value));
+                    } else if (typeof options.headers === 'object') {
+                        Object.keys(options.headers).forEach((key) => {
+                            xhr.setRequestHeader(key, options.headers[key]);
+                        });
+                    }
+                }
+
+                xhr.onload = () => {
+                    if (timedOut) return;
+                    clearTimeout(timer);
+                    cleanup();
+                    const responseText = xhr.responseText || '';
+                    const headerText = xhr.getAllResponseHeaders() || '';
+                    const headerMap = headerText.trim().split(/[\r\n]+/).reduce((acc, line) => {
+                        const parts = line.split(': ');
+                        const header = parts.shift();
+                        const value = parts.join(': ');
+                        if (header) acc[header.toLowerCase()] = value;
+                        return acc;
+                    }, {});
+                    resolve({
+                        ok: xhr.status >= 200 && xhr.status < 300,
+                        status: xhr.status,
+                        statusText: xhr.statusText,
+                        url: url,
+                        headers: {
+                            get: (name) => headerMap[(name || '').toLowerCase()] || null
+                        },
+                        text: () => Promise.resolve(responseText),
+                        json: () => new Promise((resolveJson, rejectJson) => {
+                            try {
+                                resolveJson(JSON.parse(responseText));
+                            } catch (err) {
+                                rejectJson(err);
+                            }
+                        })
+                    });
+                };
+
+                xhr.onerror = () => {
+                    if (timedOut) return;
+                    clearTimeout(timer);
+                    cleanup();
+                    reject(new Error('Network error'));
+                };
+
+                xhr.onabort = () => {
+                    if (timedOut) return;
+                    clearTimeout(timer);
+                    cleanup();
+                    if (typeof DOMException === 'function') {
+                        reject(new DOMException('Aborted', 'AbortError'));
+                    } else {
+                        const err = new Error('Aborted');
+                        err.name = 'AbortError';
+                        reject(err);
+                    }
+                };
+
+                xhr.send(options.body || null);
+            });
+        }
+
         return new Promise((resolve, reject) => {
             const controller = new AbortController();
             const originalSignal = options.signal;
