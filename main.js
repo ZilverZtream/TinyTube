@@ -680,6 +680,50 @@ const Player = {
         });
     },
 
+    openCaptionsMenu: () => {
+        const overlay = el("captions-overlay");
+        const list = el("captions-list");
+        if (!overlay || !list) return;
+
+        if (!App.captionTracks.length) {
+            Utils.toast("No captions available");
+            return;
+        }
+
+        const isVisible = !overlay.classList.contains("hidden");
+        if (isVisible) {
+            overlay.classList.add("hidden");
+            return;
+        }
+
+        if (Comments.isOpen()) Comments.close();
+        el("video-info-overlay").classList.add("hidden");
+
+        list.textContent = "";
+        const currentLang = localStorage.getItem(Player.captionLangKey()) || "";
+        App.captionTracks.forEach(track => {
+            if (!track) return;
+            const label = track.label || track.srclang || "Captions";
+            const text = track.srclang ? `${label} (${track.srclang})` : label;
+            const option = Utils.create("button", "captions-option", text);
+            option.type = "button";
+            if (!track.srclang) {
+                option.disabled = true;
+            } else {
+                if (track.srclang === currentLang) option.classList.add("active");
+                option.addEventListener("click", () => {
+                    localStorage.setItem(Player.captionLangKey(), track.srclang);
+                    Player.setCaptionMode(track.srclang, "showing");
+                    overlay.classList.add("hidden");
+                });
+            }
+            list.appendChild(option);
+        });
+
+        overlay.classList.remove("hidden");
+        HUD.refreshPinned();
+    },
+
     setupCaptions: (data) => {
         Player.clearCaptions();
         if (!data || !Array.isArray(data.captions)) return;
@@ -790,6 +834,7 @@ const Player = {
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
         HUD.updateSpeedBadge(1);
         el("video-info-overlay").classList.add("hidden");
+        el("captions-overlay").classList.add("hidden");
         Comments.reset();
         Player.clearCaptions();
 
@@ -1032,6 +1077,7 @@ const Player = {
             overlay.classList.add("hidden");
         } else {
             if (Comments.isOpen()) Comments.close();
+            el("captions-overlay").classList.add("hidden");
             // Populate info
             const data = App.currentVideoData;
             if (data) {
@@ -1062,6 +1108,7 @@ const Player = {
         el("progress-fill").style.transform = "scaleX(0)";
         el("buffer-fill").style.transform = "scaleX(0)";
         el("video-info-overlay").classList.add("hidden");
+        el("captions-overlay").classList.add("hidden");
         Comments.reset();
         Comments.close();
         if (App.playerElements) {
@@ -1125,6 +1172,7 @@ const Comments = {
         Comments.state.open = true;
         Comments.elements.overlay.classList.remove("hidden");
         el("video-info-overlay").classList.add("hidden");
+        el("captions-overlay").classList.add("hidden");
 
         if (Comments.state.videoId !== App.currentVideoId) {
             Comments.reset();
@@ -1251,7 +1299,7 @@ const PlayerControls = {
         "control-back": () => Player.seek("left"),
         "control-forward": () => Player.seek("right"),
         "control-captions": () => Player.toggleCaptions(),
-        "control-language": () => Player.cycleCaptionLanguage(),
+        "control-language": () => Player.openCaptionsMenu(),
         "control-comments": () => {
             PlayerControls.setActive(false);
             Comments.toggle();
