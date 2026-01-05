@@ -358,8 +358,9 @@ function setupRemote() {
         switch (e.keyCode) {
             case 38:
                 if (App.focus.area === "grid") {
-                    if (App.focus.index >= 4) {
-                        App.focus.index -= 4;
+                    const itemsPerRow = VirtualScroll.getItemsPerRow(document.getElementById('grid-container'));
+                    if (App.focus.index >= itemsPerRow) {
+                        App.focus.index -= itemsPerRow;
                     } else {
                         // Move to tabs if visible, otherwise to menu
                         if (!el("trending-tabs").classList.contains("hidden")) {
@@ -377,9 +378,11 @@ function setupRemote() {
                 break;
             case 40:
                 if (App.focus.area === "grid") {
-                    const row = Math.floor(App.focus.index/4), total = Math.ceil(App.items.length/4);
+                    const itemsPerRow = VirtualScroll.getItemsPerRow(document.getElementById('grid-container'));
+                    const row = Math.floor(App.focus.index / itemsPerRow);
+                    const total = Math.ceil(App.items.length / itemsPerRow);
                     if (row < total - 1) {
-                        const next = App.focus.index + 4;
+                        const next = App.focus.index + itemsPerRow;
                         App.focus.index = next < App.items.length ? next : App.items.length - 1;
                     }
                 } else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>App.menuIds.length-1) App.menuIdx=App.menuIds.length-1; }
