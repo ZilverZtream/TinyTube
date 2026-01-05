@@ -124,7 +124,6 @@
                 </div>
                 <div id="comments-list" class="comments-list"></div>
                 <div id="comments-footer" class="comments-footer hidden">Loading more...</div>
-                </div>
             </div>
         </div>
 
@@ -154,7 +153,7 @@
             <div class="setting-group"><label>Rename Profile</label><input id="profile-name-input" /></div>
             <div class="setting-group"><label>Custom API</label><input id="api-input" placeholder="https://..." /></div>
             <div class="button-row">
-                <button id="save-btn" class="focused-btn">SAVE</button>
+                <button id="save-btn" class="focused-btn" onclick="App.actions.saveSettings()">SAVE</button>
                 <button id="cancel-btn" onclick="el('settings-overlay').classList.add('hidden'); App.view='BROWSE';">CANCEL</button>
             </div>
         </div>
