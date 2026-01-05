@@ -782,7 +782,7 @@ const Player = {
         const list = el("captions-list");
         if (!overlay || !list) return;
         if (!App.captionTracks.length) { Utils.toast("No captions"); return; }
-        if (!overlay.classList.contains("hidden")) { overlay.classList.add("hidden"); return; }
+        if (!overlay.classList.contains("hidden")) { Captions.close(); return; }
         if (Comments.isOpen()) Comments.close();
         el("video-info-overlay").classList.add("hidden");
         list.textContent = "";
@@ -799,7 +799,7 @@ const Player = {
                 option.addEventListener("click", () => {
                     localStorage.setItem(Player.captionLangKey(), track.srclang);
                     Player.setCaptionMode(track.srclang, "showing");
-                    overlay.classList.add("hidden");
+                    Captions.close();
                 });
             }
             list.appendChild(option);
