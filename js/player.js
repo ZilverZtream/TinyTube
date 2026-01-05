@@ -1013,7 +1013,7 @@ const ScreenSaver = {
 };
 
 const Comments = {
-    state: { open: false, loading: false, nextPage: null, page: 1, videoId: null },
+    state: { open: false, loading: false, nextPage: null, page: 1, videoId: null, cooldownUntil: 0, scrollTimer: null },
     elements: null,
     cache: () => {
         Comments.elements = {
@@ -1025,7 +1025,7 @@ const Comments = {
     isOpen: () => Comments.state.open,
     reset: () => {
         if(!Comments.elements) Comments.cache();
-        Comments.state = { open: false, loading: false, nextPage: null, page: 1, videoId: null };
+        Comments.state = { open: false, loading: false, nextPage: null, page: 1, videoId: null, cooldownUntil: 0, scrollTimer: null };
         Comments.elements.list.textContent = "";
         Comments.elements.footer.classList.add("hidden");
         Comments.elements.count.textContent = "0 comments";
@@ -1059,7 +1059,7 @@ const Comments = {
     },
     toggle: () => Comments.isOpen() ? Comments.close() : Comments.open(),
     loadPage: async () => {
-        if(Comments.state.loading) return;
+        if(Comments.state.loading || Date.now() < Comments.state.cooldownUntil) return;
         const requestedVideoId = TinyTube.App.currentVideoId;
         Comments.state.loading = true;
         Comments.elements.footer.classList.remove("hidden");
@@ -1102,12 +1102,24 @@ const Comments = {
             }
         }
         Comments.state.loading = false;
+        Comments.state.cooldownUntil = Date.now() + 300;
         if(!Comments.state.nextPage) Comments.elements.footer.classList.add("hidden");
     },
     scroll: (dir) => {
         const l = Comments.elements.list;
         l.scrollTop = TinyTube.Utils.clamp(l.scrollTop + (140 * dir), 0, l.scrollHeight);
-        if(dir>0 && l.scrollTop + l.clientHeight >= l.scrollHeight - 40) Comments.loadPage();
+        if(dir>0 && l.scrollTop + l.clientHeight >= l.scrollHeight - 40) {
+            if(Comments.state.scrollTimer) clearTimeout(Comments.state.scrollTimer);
+            Comments.state.scrollTimer = setTimeout(() => {
+                Comments.state.scrollTimer = null;
+                if(l.scrollTop + l.clientHeight >= l.scrollHeight - 40 && !Comments.state.loading) {
+                    Comments.loadPage();
+                }
+            }, 200);
+        } else if (Comments.state.scrollTimer) {
+            clearTimeout(Comments.state.scrollTimer);
+            Comments.state.scrollTimer = null;
+        }
     }
 };
 
