@@ -350,6 +350,8 @@ const sanitizeVideoId = function(value) {
     return /^[a-zA-Z0-9_-]{11}$/.test(trimmed) ? trimmed : null;
 };
 
+let fetchDedupNonce = 0;
+
 const Utils = {
     create: (tag, cls, text) => {
         const e = document.createElement(tag);
@@ -393,9 +395,49 @@ const Utils = {
         });
     },
     fetchDedup: async (url, options = {}, timeout = CONFIG.TIMEOUT) => {
-        const cacheKey = url + (Object.keys(options).length ? '|' + JSON.stringify(options) : '');
+        const buildCacheKey = () => {
+            try {
+                const method = (options.method || 'GET').toUpperCase();
+                let headersEntries = [];
+                if (options.headers) {
+                    if (typeof Headers !== 'undefined') {
+                        const headersObj = options.headers instanceof Headers
+                            ? options.headers
+                            : new Headers(options.headers);
+                        headersEntries = Array.from(headersObj.entries());
+                    } else if (Array.isArray(options.headers)) {
+                        headersEntries = options.headers;
+                    } else if (typeof options.headers === 'object') {
+                        headersEntries = Object.entries(options.headers);
+                    } else {
+                        headersEntries = [[String(options.headers), '']];
+                    }
+                }
+
+                const normalized = {
+                    method: method,
+                    headers: headersEntries
+                };
+
+                if (typeof options.body === 'string') {
+                    normalized.body = options.body;
+                }
+
+                return url + '|' + JSON.stringify(normalized);
+            } catch (e) {
+                return null;
+            }
+        };
+
+        const normalizedKey = buildCacheKey();
+        const cacheKey = normalizedKey || (url + '|dedup-skip:' + Date.now() + ':' + (fetchDedupNonce++));
         const app = TinyTube.App;
-        if (app && app.pendingFetches && app.pendingFetches[cacheKey]) return app.pendingFetches[cacheKey];
+        if (app && app.pendingFetches && app.pendingFetches[cacheKey]) {
+            if (CONFIG.DEBUG) {
+                console.log('TinyTube: fetchDedup hit for key', cacheKey);
+            }
+            return app.pendingFetches[cacheKey];
+        }
         const promise = Utils.fetchWithTimeout(url, options, timeout)
             .finally(() => {
                 if (app && app.pendingFetches) delete app.pendingFetches[cacheKey];
