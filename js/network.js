@@ -41,9 +41,9 @@ const CipherBreaker = {
         // Standard pattern: a=a.split("");...return a.join("")
         /\b[a-zA-Z0-9$]{2,}\s*=\s*function\(\s*a\s*\)\s*\{\s*a\s*=\s*a\.split\(\s*""\s*\);([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a,\d+\)/,
         // Alternate pattern: a=a.split("");...a.join("") (no return)
-        /\b[a-zA-Z0-9$]{2,}\s*=\s*function\(\s*a\s*\)\s*\{\s*a\s*=\s*a\.split\(\s*""\s*\);(.*?);return\s+a\.join\(\s*""\s*\)/,
+        /\b[a-zA-Z0-9$]{2,}\s*=\s*function\(\s*a\s*\)\s*\{\s*a\s*=\s*a\.split\(\s*""\s*\);([^}]+);return\s+a\.join\(\s*""\s*\)/,
         // Fallback: Just look for the body structure
-        /function\(\w+\)\{a=a\.split\(""\);(.*?);return a\.join\(""\)\}/
+        /function\(\w+\)\{a=a\.split\(""\);([^}]+);return a\.join\(""\)\}/
     ],
 
     getCache: () => {

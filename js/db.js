@@ -63,7 +63,11 @@ const DB = {
                 }
             }
         }
-        SafeStorage.setItem(`tt_history_${TinyTube.App.profileId}`, JSON.stringify(TinyTube.App.watchHistory));
+        const historyKey = `tt_history_${TinyTube.App.profileId}`;
+        const saveResult = SafeStorage.setItem(historyKey, JSON.stringify(TinyTube.App.watchHistory));
+        if (saveResult && saveResult.trimmedHistory && saveResult.trimmedKey === historyKey) {
+            TinyTube.App.watchHistory = saveResult.trimmedHistory;
+        }
     },
     getPosition: (videoId) => {
         if (!videoId || !TinyTube.App.watchHistory[videoId]) return 0;

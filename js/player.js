@@ -757,7 +757,12 @@ const Player = {
             // Preload the stream URL in the background
             if (TinyTube.App.api) {
                 const vId = nextVideo.videoId;
-                TinyTube.Utils.fetchDedup(`${TinyTube.App.api}/videos/${vId}`)
+                if (TinyTube.App.preloadAbortController) {
+                    TinyTube.App.preloadAbortController.abort();
+                }
+                TinyTube.App.preloadAbortController = new AbortController();
+                const preloadSignal = TinyTube.App.preloadAbortController.signal;
+                TinyTube.Utils.fetchDedup(`${TinyTube.App.api}/videos/${vId}`, { signal: preloadSignal })
                     .then(res => res.ok ? res.json() : null)
                     .then(data => {
                         if (data && data.formatStreams) {
@@ -770,7 +775,14 @@ const Player = {
                             }
                         }
                     })
-                    .catch(e => console.log('Preload failed:', e.message));
+                    .catch(e => {
+                        if (e.name !== "AbortError") console.log('Preload failed:', e.message);
+                    })
+                    .finally(() => {
+                        if (TinyTube.App.preloadAbortController && TinyTube.App.preloadAbortController.signal === preloadSignal) {
+                            TinyTube.App.preloadAbortController = null;
+                        }
+                    });
             }
         } catch (e) {
             console.log('Preload error:', e.message);
@@ -822,6 +834,10 @@ const Player = {
         TinyTube.App.currentQuality = null;
         TinyTube.App.lastRenderDuration = null;
         TinyTube.App.currentStreamUrl = null;
+        if (TinyTube.App.preloadAbortController) {
+            TinyTube.App.preloadAbortController.abort();
+            TinyTube.App.preloadAbortController = null;
+        }
         TinyTube.App.upNext = [];
         TinyTube.App.seekKeyHeld = null;
         TinyTube.App.seekKeyTime = 0;
