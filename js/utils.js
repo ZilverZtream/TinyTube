@@ -465,10 +465,10 @@ const Utils = {
         return null;
     },
     getAuthorThumb: (item) => {
-        if (!item) return "icon.png";
+        if (!item) return "default.png";
         if (item.authorThumbnails && item.authorThumbnails[0]) return item.authorThumbnails[0].url;
         if (item.thumb) return item.thumb;
-        return "icon.png";
+        return "default.png";
     },
     clamp: (val, min, max) => Math.max(min, Math.min(max, val)),
     getFormatHeight: (format) => {
