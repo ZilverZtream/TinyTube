@@ -74,7 +74,7 @@ const App = {
     
     pendingDeArrow: {},
     pendingFetches: {},
-    rafId: null,
+    renderTimer: null,
     lazyObserver: null,
     supportsSmoothScroll: true,
     lastFocused: null,
@@ -91,6 +91,7 @@ const App = {
     seekRepeatCount: 0,
     hudTimer: null,
     lastRenderSec: null,
+    lastRenderDuration: null,
     
     playerElements: null,
     watchHistory: null,
@@ -966,8 +967,7 @@ const Player = {
             if (savedPos > 0) { p.currentTime = savedPos; Utils.toast(`Resume: ${Utils.formatTime(savedPos)}`); }
             p.play().catch(e => { console.log("Play failed", e); Player.enforce(vId); });
             Player.setupHUD(p);
-            if (App.rafId) cancelAnimationFrame(App.rafId);
-            App.rafId = requestAnimationFrame(Player.renderLoop);
+            Player.startRenderLoop();
         } else {
             Player.enforce(vId);
         }
@@ -984,8 +984,7 @@ const Player = {
         const p = App.playerElements.player;
         p.style.display = "none";
         p.pause();
-        if (App.rafId) cancelAnimationFrame(App.rafId);
-        App.rafId = null;
+        Player.stopRenderLoop();
         try {
             el("enforcement-container").innerHTML = `<iframe src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
             Utils.toast("Src: Embed");
@@ -1002,40 +1001,56 @@ const Player = {
         p.onplay = () => {
             App.playerElements.bufferingSpinner.classList.add("hidden");
             show();
-            if (!App.rafId && App.playerMode === "BYPASS") App.rafId = requestAnimationFrame(Player.renderLoop);
+            if (!App.renderTimer && App.playerMode === "BYPASS") Player.startRenderLoop();
         };
-        p.onpause = show;
+        p.onpause = () => {
+            show();
+            Player.stopRenderLoop();
+        };
         p.onseeked = show;
         p.onwaiting = () => App.playerElements.bufferingSpinner.classList.remove("hidden");
         p.onplaying = () => App.playerElements.bufferingSpinner.classList.add("hidden");
         p.onerror = () => Player.enforce(App.currentVideoId);
     },
+    startRenderLoop: () => {
+        Player.stopRenderLoop();
+        App.lastRenderSec = null;
+        App.lastRenderDuration = null;
+        App.renderTimer = setTimeout(Player.renderLoop, 300);
+    },
+    stopRenderLoop: () => {
+        if (App.renderTimer) clearTimeout(App.renderTimer);
+        App.renderTimer = null;
+    },
+    updateHud: (p) => {
+        const currentSec = Math.floor(p.currentTime);
+        const duration = p.duration;
+        if (currentSec === App.lastRenderSec && duration === App.lastRenderDuration) return;
+        App.lastRenderSec = currentSec;
+        App.lastRenderDuration = duration;
+        const pe = App.playerElements;
+        const hasFiniteDuration = isFinite(duration) && duration > 0;
+        if (hasFiniteDuration) {
+            pe.progressFill.style.transform = `scaleX(${p.currentTime / duration})`;
+        }
+        pe.currTime.textContent = Utils.formatTime(p.currentTime);
+        pe.totalTime.textContent = Utils.formatTime(duration);
+        if (hasFiniteDuration && p.buffered.length) {
+            pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / duration})`;
+        }
+    },
     renderLoop: () => {
         if (App.view !== "PLAYER") {
-            if(App.rafId) cancelAnimationFrame(App.rafId);
-            App.rafId = null;
+            Player.stopRenderLoop();
             return;
         }
         const p = App.playerElements.player;
         if (App.playerMode === "ENFORCE" || p.paused) {
-            App.rafId = null;
+            Player.stopRenderLoop();
             return;
         }
         if (!isNaN(p.duration)) {
-            const currentSec = Math.floor(p.currentTime);
-            if (currentSec !== App.lastRenderSec) {
-                App.lastRenderSec = currentSec;
-                const pe = App.playerElements;
-                const hasFiniteDuration = isFinite(p.duration) && p.duration > 0;
-                if (hasFiniteDuration) {
-                    pe.progressFill.style.transform = `scaleX(${p.currentTime / p.duration})`;
-                }
-                pe.currTime.textContent = Utils.formatTime(p.currentTime);
-                pe.totalTime.textContent = Utils.formatTime(p.duration);
-                if (hasFiniteDuration && p.buffered.length) {
-                    pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / p.duration})`;
-                }
-            }
+            Player.updateHud(p);
             const s = Utils.findSegment(p.currentTime);
             if (s && s !== App.lastSkippedSeg) {
                 App.lastSkippedSeg = s;
@@ -1043,7 +1058,7 @@ const Player = {
                 Utils.toast("Skipped");
             } else if (!s) App.lastSkippedSeg = null;
         }
-        App.rafId = requestAnimationFrame(Player.renderLoop);
+        App.renderTimer = setTimeout(Player.renderLoop, 300);
     },
     seek: (direction, accelerated = false) => {
         const p = App.playerElements.player;
@@ -1101,9 +1116,9 @@ const Player = {
         el("video-info-overlay").classList.add("hidden");
         el("captions-overlay").classList.add("hidden");
         Comments.reset(); Comments.close();
-        if(App.rafId) cancelAnimationFrame(App.rafId);
-        App.rafId = null;
+        Player.stopRenderLoop();
         App.lastRenderSec = null;
+        App.lastRenderDuration = null;
         App.currentStreamUrl = null;
         Player.clearCaptions();
         ScreenSaver.restore();
@@ -1429,7 +1444,7 @@ function setupRemote() {
                         p.style.display="block";
                         p.play();
                         App.playerMode="BYPASS";
-                        if (!App.rafId) App.rafId = requestAnimationFrame(Player.renderLoop);
+                        if (!App.renderTimer) Player.startRenderLoop();
                     }
                     break;
                 }
