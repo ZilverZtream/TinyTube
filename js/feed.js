@@ -12,6 +12,7 @@ const Feed = {
             return Feed.fetch("/trending");
         }
         el("section-title").textContent = `My Feed (${subs.length})`;
+        TinyTube.CardPool.releaseAll(el("grid-container"));
         el("grid-container").innerHTML = '<div class="loading-spinner"><div class="spinner-icon"></div><p>Building Feed...</p></div>';
         try {
             const results = await Utils.processQueue(subs, 3, async (sub) => {
