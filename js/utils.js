@@ -160,7 +160,7 @@ const WorkerPool = {
     parse: function(jsonString) {
         if (!this.worker || jsonString.length < 10000) {
             // Use main thread for small payloads
-            return Promise.resolve(JSON.parse(jsonString));
+            return Promise.resolve().then(() => JSON.parse(jsonString));
         }
 
         return new Promise((resolve, reject) => {
