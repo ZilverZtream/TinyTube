@@ -2818,13 +2818,22 @@ function setupRemote() {
             return;
         }
 
-        // Help key (191 = ? key, 72 = H key)
-        if ((e.keyCode === 191 || e.keyCode === 72) && e.shiftKey) {
+        // Help key - Number 0 on remote
+        if (e.keyCode === 48 || e.keyCode === 96) { // 0 key (both regular and numpad)
             Shortcuts.open();
             return;
         }
 
         if (App.view === "PLAYER") {
+            // Quality & Chapters - Number keys 1 and 2
+            if (e.keyCode === 49 || e.keyCode === 97) { // 1 key
+                Quality.open();
+                return;
+            }
+            if (e.keyCode === 50 || e.keyCode === 98) { // 2 key
+                Chapters.open();
+                return;
+            }
             if (App.activeLayer === "COMMENTS") {
                 if (e.keyCode === 38) Comments.scroll(-1);
                 else if (e.keyCode === 40) Comments.scroll(1);
@@ -2842,14 +2851,14 @@ function setupRemote() {
                 if (e.keyCode === 38) Quality.move(-1);
                 else if (e.keyCode === 40) Quality.move(1);
                 else if (e.keyCode === 13) Quality.select();
-                else if (e.keyCode === 10009 || e.keyCode === 81) Quality.close(); // 81 = Q
+                else if (e.keyCode === 10009) Quality.close();
                 return;
             }
             if (App.activeLayer === "CHAPTERS") {
                 if (e.keyCode === 38) Chapters.move(-1);
                 else if (e.keyCode === 40) Chapters.move(1);
                 else if (e.keyCode === 13) Chapters.select();
-                else if (e.keyCode === 10009 || e.keyCode === 84) Chapters.close(); // 84 = T
+                else if (e.keyCode === 10009) Chapters.close();
                 return;
             }
             if (App.activeLayer === "INFO") {
@@ -2899,8 +2908,6 @@ function setupRemote() {
                 case 404: if (App.playerMode === "BYPASS") Player.cycleSpeed(); break;
                 case 405: Comments.open(); break;
                 case 406: const i=App.currentVideoData; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); break;
-                case 81: Quality.open(); break; // Q key
-                case 84: Chapters.open(); break; // T key
                 case 457:
                     if(!App.infoKeyTimer) {
                         App.infoKeyHandled=false;
@@ -3013,13 +3020,13 @@ function setupRemote() {
                 else if (App.focus.area === "tabs") TrendingTabs.activateFocused();
                 else if (App.focus.area === "filters") SearchFilters.activateFocused();
                 break;
-            case 67: // C key - Open channel page
+            case 51: case 99: // Number 3 - Open channel page
                 if (App.focus.area === "grid") {
                     const i = App.items[App.focus.index];
                     if (i && i.authorId) Feed.loadChannel(i.authorId, i.author);
                 }
                 break;
-            case 81: // Q key - Add to Watch Later
+            case 52: case 100: // Number 4 - Add to Watch Later
                 if (App.focus.area === "grid") {
                     const i = App.items[App.focus.index];
                     if (i && i.videoId) DB.addToWatchLater(i);
