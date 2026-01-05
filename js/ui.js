@@ -791,7 +791,7 @@ const UI = {
         if (TinyTube.App.deArrowCache.has(vId)) { UI.applyDeArrow(TinyTube.App.deArrowCache.get(vId), idx, vId); return; }
         if (TinyTube.App.pendingDeArrow[vId]) {
             if (TinyTube.App.pendingDeArrow[vId].timer) clearTimeout(TinyTube.App.pendingDeArrow[vId].timer);
-            if (TinyTube.App.pendingDeArrow[vId].cancelled) TinyTube.App.pendingDeArrow[vId].cancelled = true;
+            TinyTube.App.pendingDeArrow[vId].cancelled = true;
         }
         const operation = { timer: null, cancelled: false };
         TinyTube.App.pendingDeArrow[vId] = operation;
