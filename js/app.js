@@ -492,14 +492,41 @@ window.onload = async () => {
     DB.loadProfile();
 
     // --- STARTUP SEQUENCE ---
-    // 1. Try to break cipher
-    el("backend-status").textContent = "Breaking Cipher...";
-    const freshCipher = await CipherBreaker.run();
-    CONFIG.CIPHER_SEQUENCE = freshCipher;
-
-    // 2. Connect
     el("backend-status").textContent = "Connecting...";
     await Network.connect();
+
+    const updateBackendStatus = (cipherStatus) => {
+        const apiLabel = App.api === CONFIG.PRIMARY_API ? "Perditum" : "Custom";
+        el("backend-status").textContent = `API: ${apiLabel} | Cipher: ${cipherStatus}`;
+    };
+
+    updateBackendStatus("checking...");
+    CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
+
+    requestAnimationFrame(() => {
+        const cipherTimeoutMs = 4000;
+        let cipherResolved = false;
+        const cipherTimeout = setTimeout(() => {
+            if (!cipherResolved) {
+                CONFIG.CIPHER_SEQUENCE = CONFIG.DEFAULT_CIPHER;
+                updateBackendStatus("default (timeout)");
+            }
+        }, cipherTimeoutMs);
+
+        CipherBreaker.run()
+            .then((freshCipher) => {
+                cipherResolved = true;
+                clearTimeout(cipherTimeout);
+                CONFIG.CIPHER_SEQUENCE = freshCipher;
+                updateBackendStatus("updated");
+            })
+            .catch((error) => {
+                cipherResolved = true;
+                clearTimeout(cipherTimeout);
+                console.log("Cipher breaker failed:", error?.message || error);
+                updateBackendStatus("default (error)");
+            });
+    });
 };
 
 // --- CLEANUP ON EXIT ---
