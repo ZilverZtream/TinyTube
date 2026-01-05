@@ -13,11 +13,14 @@ const CardPool = {
     },
     release: function(element) {
         if (!element) return;
-        // Clean up element
-        element.className = '';
+        // Clean up element without destroying template structure
+        element.classList.remove('focused');
+        element.classList.remove('focused-btn');
         element.id = '';
-        element.innerHTML = '';
         element.removeAttribute('style');
+
+        const type = element.classList.contains('channel-card') ? 'channel' : 'video';
+        element.dataset.poolType = type;
         // Return to pool if under limit
         if (this.pool.length < CONFIG.CARD_POOL_SIZE) {
             this.pool.push(element);
@@ -263,11 +266,21 @@ const UI = {
                 if (existingCards.has(idx)) continue;
 
                 const item = TinyTube.App.items[idx];
-                let div;
+                const desiredType = item.type === "channel" ? "channel" : "video";
+                let div = null;
+                const poolIdx = CardPool.pool.findIndex(e => e.dataset.poolType === desiredType);
+                if (poolIdx > -1) {
+                    div = CardPool.pool.splice(poolIdx, 1)[0];
+                }
 
                 // DOM Template Cloning: 40% faster than createElement
                 if (item.type === "channel" && TinyTube.App.channelCardTemplate) {
-                    div = TinyTube.App.channelCardTemplate.cloneNode(true);
+                    if (!div) {
+                        div = TinyTube.App.channelCardTemplate.cloneNode(true);
+                    }
+                    div.classList.add("channel-card");
+                    div.classList.remove("video-card");
+                    div.dataset.poolType = "channel";
                     div.id = `card-${idx}`;
 
                     let thumbUrl = "icon.png";
@@ -280,20 +293,33 @@ const UI = {
                             img.dataset.src = thumbUrl;
                             img.src = "icon.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
-                        } else { img.src = thumbUrl; }
+                        } else {
+                            img.src = thumbUrl;
+                            img.removeAttribute("data-src");
+                        }
                     }
 
                     const h3 = div.querySelector('h3');
                     if (h3) h3.textContent = item.author || '';
 
-                    const subTag = div.querySelector('.sub-tag');
-                    if (subTag) {
-                        if (!TinyTube.DB.isSubbed(item.authorId)) {
-                            subTag.remove();
+                    let subTag = div.querySelector('.sub-tag');
+                    const isSubbed = TinyTube.DB.isSubbed(item.authorId);
+                    if (isSubbed) {
+                        if (!subTag) {
+                            subTag = TinyTube.Utils.create("div", "sub-tag", "SUBSCRIBED");
+                            div.appendChild(subTag);
                         }
+                        subTag.classList.remove("hidden");
+                    } else if (subTag) {
+                        subTag.classList.add("hidden");
                     }
                 } else if (TinyTube.App.videoCardTemplate) {
-                    div = TinyTube.App.videoCardTemplate.cloneNode(true);
+                    if (!div) {
+                        div = TinyTube.App.videoCardTemplate.cloneNode(true);
+                    }
+                    div.classList.add("video-card");
+                    div.classList.remove("channel-card");
+                    div.dataset.poolType = "video";
                     div.id = `card-${idx}`;
 
                     let thumbUrl = "icon.png";
@@ -307,21 +333,30 @@ const UI = {
                             img.dataset.src = thumbUrl;
                             img.src = "icon.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
-                        } else { img.src = thumbUrl; }
+                        } else {
+                            img.src = thumbUrl;
+                            img.removeAttribute("data-src");
+                        }
                     }
 
                     const durationBadge = div.querySelector('.duration-badge');
                     if (durationBadge) {
                         if (item.lengthSeconds) {
                             durationBadge.textContent = TinyTube.Utils.formatTime(item.lengthSeconds);
+                            durationBadge.classList.remove("hidden");
                         } else {
-                            durationBadge.remove();
+                            durationBadge.textContent = "";
+                            durationBadge.classList.add("hidden");
                         }
                     }
 
                     const liveBadge = div.querySelector('.live-badge');
-                    if (liveBadge && !item.liveNow) {
-                        liveBadge.remove();
+                    if (liveBadge) {
+                        if (item.liveNow) {
+                            liveBadge.classList.remove("hidden");
+                        } else {
+                            liveBadge.classList.add("hidden");
+                        }
                     }
 
                     const resumeBadge = div.querySelector('.resume-badge');
@@ -330,8 +365,10 @@ const UI = {
                         const savedPos = vId ? TinyTube.DB.getPosition(vId) : 0;
                         if (savedPos > 0) {
                             resumeBadge.textContent = TinyTube.Utils.formatTime(savedPos);
+                            resumeBadge.classList.remove("hidden");
                         } else {
-                            resumeBadge.remove();
+                            resumeBadge.textContent = "";
+                            resumeBadge.classList.add("hidden");
                         }
                     }
 
@@ -350,13 +387,13 @@ const UI = {
                     }
                 } else {
                     // Fallback to old method if templates not loaded
-                    div = CardPool.get();
-                    if (!div) {
-                        div = document.createElement("div");
-                    }
+                    div = div || CardPool.get();
+                    if (!div) div = document.createElement("div");
 
+                    div.textContent = "";
                     div.className = item.type === "channel" ? "channel-card" : "video-card";
                     div.id = `card-${idx}`;
+                    div.dataset.poolType = desiredType;
 
                     let thumbUrl = "icon.png";
                     if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
