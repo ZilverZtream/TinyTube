@@ -826,7 +826,13 @@ const Player = {
 
     // 60FPS UI Loop with cached DOM elements
     renderLoop: () => {
-        if (App.view !== "PLAYER") return;
+        if (App.view !== "PLAYER") {
+            if (App.rafId !== null) {
+                cancelAnimationFrame(App.rafId);
+                App.rafId = null;
+            }
+            return;
+        }
 
         const pe = App.playerElements;
         const p = pe.player;
