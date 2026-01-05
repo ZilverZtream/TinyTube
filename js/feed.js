@@ -102,7 +102,9 @@ const Feed = {
         const queue = TinyTube.DB.getWatchLater();
         if (queue.length === 0) {
             el("grid-container").innerHTML = '<div class="empty-state"><div class="icon">⏰</div><h3>No Videos in Queue</h3><p>Add videos to watch later</p></div>';
-            VirtualScroll.reset();
+            if (TinyTube.VirtualScroll && TinyTube.VirtualScroll.reset) {
+                TinyTube.VirtualScroll.reset();
+            }
             return;
         }
         TinyTube.UI.renderGrid(queue.map(v => ({
@@ -121,7 +123,9 @@ const Feed = {
         const history = TinyTube.DB.getFullHistory();
         if (history.length === 0) {
             el("grid-container").innerHTML = '<div class="empty-state"><div class="icon">🕐</div><h3>No History</h3><p>Your watched videos will appear here</p></div>';
-            VirtualScroll.reset();
+            if (TinyTube.VirtualScroll && TinyTube.VirtualScroll.reset) {
+                TinyTube.VirtualScroll.reset();
+            }
             return;
         }
         TinyTube.UI.renderGrid(history.map(h => ({
