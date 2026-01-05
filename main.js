@@ -2751,7 +2751,7 @@ const Captions = {
 };
 
 const PlayerControls = {
-    ids: ["control-play","control-back","control-forward","control-quality","control-chapters","control-captions","control-language","control-comments","control-subscribe","control-watchlater"],
+    ids: ["control-play","control-back","control-forward","control-quality","control-chapters","control-captions","control-language","control-comments","control-subscribe","control-watchlater","control-help"],
     buttons: [],
     actions: {
         "control-play": () => { const p=el("native-player"); if(App.playerMode==="BYPASS") p.paused?p.play():p.pause(); },
@@ -2763,7 +2763,8 @@ const PlayerControls = {
         "control-language": () => Captions.open(),
         "control-comments": () => Comments.open(),
         "control-subscribe": () => { const i=App.currentVideoData; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); },
-        "control-watchlater": () => { const i=App.currentVideoData; if(i) DB.addToWatchLater(i); }
+        "control-watchlater": () => { const i=App.currentVideoData; if(i) DB.addToWatchLater(i); },
+        "control-help": () => Shortcuts.open()
     },
     init: () => {
         PlayerControls.buttons = PlayerControls.ids.map((id, idx) => {
@@ -2812,28 +2813,13 @@ function setupRemote() {
     document.addEventListener('keydown', (e) => {
         if (e.keyCode !== 10009) App.exitCounter = 0;
 
-        // Global Shortcuts Overlay (accessible from anywhere)
+        // Shortcuts overlay - only accessible via player controls
         if (App.activeLayer === "SHORTCUTS") {
             if (e.keyCode === 13 || e.keyCode === 10009) Shortcuts.close();
             return;
         }
 
-        // Help key - Number 0 on remote
-        if (e.keyCode === 48 || e.keyCode === 96) { // 0 key (both regular and numpad)
-            Shortcuts.open();
-            return;
-        }
-
         if (App.view === "PLAYER") {
-            // Quality & Chapters - Number keys 1 and 2
-            if (e.keyCode === 49 || e.keyCode === 97) { // 1 key
-                Quality.open();
-                return;
-            }
-            if (e.keyCode === 50 || e.keyCode === 98) { // 2 key
-                Chapters.open();
-                return;
-            }
             if (App.activeLayer === "COMMENTS") {
                 if (e.keyCode === 38) Comments.scroll(-1);
                 else if (e.keyCode === 40) Comments.scroll(1);
@@ -3019,18 +3005,6 @@ function setupRemote() {
                 }
                 else if (App.focus.area === "tabs") TrendingTabs.activateFocused();
                 else if (App.focus.area === "filters") SearchFilters.activateFocused();
-                break;
-            case 51: case 99: // Number 3 - Open channel page
-                if (App.focus.area === "grid") {
-                    const i = App.items[App.focus.index];
-                    if (i && i.authorId) Feed.loadChannel(i.authorId, i.author);
-                }
-                break;
-            case 52: case 100: // Number 4 - Add to Watch Later
-                if (App.focus.area === "grid") {
-                    const i = App.items[App.focus.index];
-                    if (i && i.videoId) DB.addToWatchLater(i);
-                }
                 break;
             case 406:
                 if (App.focus.area === "grid") {
