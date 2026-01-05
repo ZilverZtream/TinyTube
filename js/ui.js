@@ -725,7 +725,7 @@ const UI = {
         }
         TinyTube.App.lastFocused = null;
         if (TinyTube.App.focus.area === "menu") {
-            const menuItem = el(["menu-home", "menu-subs", "menu-search", "menu-settings"][TinyTube.App.menuIdx]);
+            const menuItem = el(TinyTube.App.menuIds[TinyTube.App.menuIdx]);
             if (menuItem) {
                 menuItem.classList.add("focused");
                 TinyTube.App.lastFocused = menuItem;
