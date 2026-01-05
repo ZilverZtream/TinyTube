@@ -115,6 +115,26 @@ function clearServiceWorkerCache() {
         .catch(() => {});
 }
 
+function updateServiceWorkerCacheContext(options = {}) {
+    if (!('serviceWorker' in navigator)) {
+        return;
+    }
+
+    const customBase = SafeStorage.getItem("customBase") || "";
+    navigator.serviceWorker.ready
+        .then((registration) => {
+            if (registration.active) {
+                registration.active.postMessage({
+                    type: "SET_CACHE_CONTEXT",
+                    profileId: App.profileId,
+                    customBase: customBase,
+                    disableCache: options.disableCache === true
+                });
+            }
+        })
+        .catch(() => {});
+}
+
 App.actions = {
     menuSelect: () => {
         // Hide category tabs and filters when switching views
@@ -200,9 +220,11 @@ App.actions = {
         App.subsCache = null;
         App.subsCacheId = null;
 
-        if (previousCustomBase !== nextCustomBase) {
+        const customApiSaved = api && !apiError;
+        if (customApiSaved || previousCustomBase !== nextCustomBase) {
             clearServiceWorkerCache();
         }
+        updateServiceWorkerCacheContext({ disableCache: previousCustomBase !== nextCustomBase });
 
         // Reconnect to API and reload feed
         Network.connect();
@@ -222,6 +244,7 @@ App.actions = {
         App.subsCache = null;
         App.subsCacheId = null;
         clearServiceWorkerCache();
+        updateServiceWorkerCacheContext();
 
         DB.loadProfile();
 
@@ -515,6 +538,7 @@ window.onload = () => {
     el("backend-status").textContent = "Init...";
     setupRemote();
     DB.loadProfile();
+    updateServiceWorkerCacheContext();
 
     // --- STARTUP SEQUENCE ---
     let backendReady = false;
