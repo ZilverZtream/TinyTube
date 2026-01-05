@@ -1,5 +1,11 @@
 /**
- * TinyTube Pro v6.0.1 (Tizen 4.0+ Optimized)
+ * TinyTube Pro v6.0.2 (Tizen 4.0+ Optimized)
+ *
+ * v6.0.2 Changes:
+ * - FIX: Zombie audio race condition - verify app state after async fetch in Player.start
+ * - FIX: Add webapis.js for Tizen hardware APIs (screensaver control, 4K switching)
+ * - FIX: Disable screensaver during playback to prevent screen dimming
+ * - FIX: Sticky keyboard glitch - blur search input when navigating away with DOWN key
  *
  * v6.0.1 Changes:
  * - FIX: Request deduplication now actually used in Feed.loadHome, Feed.fetch, and DeArrow
@@ -686,6 +692,10 @@ const Player = {
             if (!streamUrl) {
                 try {
                     const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`);
+
+                    // CRITICAL: Check if user navigated away during fetch
+                    if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
+
                     if (!res.ok) throw new Error('Video fetch failed');
 
                     let data;
@@ -694,6 +704,9 @@ const Player = {
                     } catch (jsonErr) {
                         throw new Error('Invalid JSON response');
                     }
+
+                    // Check again after JSON parsing (another async operation)
+                    if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
 
                     App.currentVideoData = data;
 
@@ -1005,7 +1018,11 @@ function setupRemote() {
 
         if (App.focus.area === "search") {
             if (e.keyCode === 13) App.actions.runSearch();
-            if (e.keyCode === 40) { App.focus.area = "grid"; UI.updateFocus(); }
+            if (e.keyCode === 40) {
+                el("search-input").blur(); // Force close virtual keyboard (IME)
+                App.focus.area = "grid";
+                UI.updateFocus();
+            }
             return;
         }
 
@@ -1147,6 +1164,13 @@ window.onload = async () => {
     if (typeof tizen !== 'undefined') {
         const k = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'Return', 'Info'];
         k.forEach(key => { try { tizen.tvinputdevice.registerKey(key); } catch (e) {} });
+    }
+
+    // Disable screensaver to prevent screen dimming during video playback
+    if (window.webapis && window.webapis.appcommon) {
+        try {
+            webapis.appcommon.setScreenSaver(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_OFF);
+        } catch (e) {}
     }
 
     el("backend-status").textContent = "Init...";
