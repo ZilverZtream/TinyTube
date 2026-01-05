@@ -107,6 +107,9 @@ const App = {
     currentVideoId: null,
     currentVideoData: null, // Full video metadata for info overlay
     playbackSpeedIdx: 0,
+    captionTracks: [],
+    infoKeyTimer: null,
+    infoKeyHandled: false,
     // Seek acceleration state
     seekKeyHeld: null, // 'left' or 'right' or null
     seekKeyTime: 0, // When key was first pressed
@@ -638,6 +641,88 @@ const Player = {
         };
     },
 
+    captionLangKey: () => `tt_caption_lang_${App.profileId}`,
+
+    clearCaptions: () => {
+        const p = App.playerElements ? App.playerElements.player : el("native-player");
+        if (!p) return;
+        p.querySelectorAll("track").forEach(track => track.remove());
+        App.captionTracks = [];
+    },
+
+    setCaptionMode: (lang, mode) => {
+        App.captionTracks.forEach(track => {
+            if (!track || !track.track) return;
+            if (lang && track.srclang === lang) {
+                track.track.mode = mode;
+            } else {
+                track.track.mode = "hidden";
+            }
+        });
+    },
+
+    setupCaptions: (data) => {
+        Player.clearCaptions();
+        if (!data || !Array.isArray(data.captions)) return;
+
+        const storedLang = localStorage.getItem(Player.captionLangKey()) || "";
+        const captions = data.captions.map(caption => {
+            if (!caption) return null;
+            const src = caption.url || caption.vttUrl || caption.baseUrl || caption.caption_url;
+            if (!src) return null;
+            const srclang = caption.language_code || caption.languageCode || caption.srclang || caption.code || "";
+            const label = caption.label || caption.name || srclang || "Subtitles";
+            return { src, srclang, label };
+        }).filter(Boolean);
+
+        if (!captions.length) return;
+
+        const p = App.playerElements.player;
+        captions.forEach(caption => {
+            const track = document.createElement("track");
+            track.kind = "subtitles";
+            track.label = caption.label;
+            if (caption.srclang) track.srclang = caption.srclang;
+            track.src = caption.src;
+            p.appendChild(track);
+            App.captionTracks.push(track);
+        });
+
+        if (storedLang) {
+            Player.setCaptionMode(storedLang, "showing");
+        }
+    },
+
+    toggleCaptions: () => {
+        if (!App.captionTracks.length) {
+            Utils.toast("No captions available");
+            return;
+        }
+
+        const showingTrack = App.captionTracks.find(track => track.track && track.track.mode === "showing");
+        if (showingTrack) {
+            App.captionTracks.forEach(track => {
+                if (track.track) track.track.mode = "hidden";
+            });
+            Utils.toast("Captions off");
+            return;
+        }
+
+        let lang = localStorage.getItem(Player.captionLangKey()) || "";
+        if (!lang) {
+            const firstTrack = App.captionTracks.find(track => track.srclang);
+            lang = firstTrack ? firstTrack.srclang : "";
+        }
+
+        if (lang) {
+            localStorage.setItem(Player.captionLangKey(), lang);
+            Player.setCaptionMode(lang, "showing");
+            Utils.toast(`Captions: ${lang}`);
+        } else {
+            Utils.toast("No captions available");
+        }
+    },
+
     start: async (item, retryCount = 0) => {
         if (!item) return;
         App.view = "PLAYER";
@@ -660,6 +745,7 @@ const Player = {
         HUD.updateSubBadge(DB.isSubbed(item.authorId));
         HUD.updateSpeedBadge(1);
         el("video-info-overlay").classList.add("hidden");
+        Player.clearCaptions();
 
         // Get thumbnail for poster
         let posterUrl = "";
@@ -712,6 +798,7 @@ const Player = {
             if (cached && cached.url) {
                 streamUrl = cached.url;
                 App.currentVideoData = cached.data;
+                Player.setupCaptions(App.currentVideoData);
             }
 
             if (!streamUrl) {
@@ -734,6 +821,7 @@ const Player = {
                     if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
 
                     App.currentVideoData = data;
+                    Player.setupCaptions(App.currentVideoData);
 
                     const streams = data.formatStreams || [];
                     const adaptiveStreams = data.adaptiveFormats || [];
@@ -944,6 +1032,7 @@ const Player = {
         App.currentVideoId = null;
         App.currentVideoData = null;
         App.seekKeyHeld = null;
+        Player.clearCaptions();
     }
 };
 
@@ -961,6 +1050,14 @@ function setupRemote() {
         if (e.keyCode === 37 || e.keyCode === 39) {
             App.seekKeyHeld = null;
             App.seekKeyTime = 0;
+        }
+        if (e.keyCode === 457 && App.view === "PLAYER") {
+            if (App.infoKeyTimer) {
+                clearTimeout(App.infoKeyTimer);
+                App.infoKeyTimer = null;
+                if (!App.infoKeyHandled) Player.toggleInfo();
+                App.infoKeyHandled = false;
+            }
         }
     });
 
@@ -1020,7 +1117,14 @@ function setupRemote() {
                     if (item.authorId) DB.toggleSub(item.authorId, item.author, Utils.getAuthorThumb(item));
                     break;
                 case 457: // INFO button (some remotes)
-                    Player.toggleInfo();
+                    if (!App.infoKeyTimer) {
+                        App.infoKeyHandled = false;
+                        App.infoKeyTimer = setTimeout(() => {
+                            App.infoKeyHandled = true;
+                            App.infoKeyTimer = null;
+                            Player.toggleCaptions();
+                        }, 600);
+                    }
                     break;
             }
             return;
