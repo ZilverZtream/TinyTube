@@ -20,7 +20,7 @@ body {
 #sidebar {
     width: 100px;
     height: 100vh;
-    background: linear-gradient(180deg, #0d0d0d 0%, #050505 100%);
+    background: #0a0a0a;
     position: fixed;
     display: flex;
     flex-direction: column;
@@ -29,7 +29,6 @@ body {
     border-right: 1px solid #1a1a1a;
     z-index: 10;
     transition: width 0.3s cubic-bezier(0.2,0,0,1);
-    box-shadow: 2px 0 20px rgba(0,0,0,0.5);
     contain: layout;
 }
 #sidebar.expanded {
@@ -100,16 +99,14 @@ body {
 }
 .menu-item:hover,
 .menu-item.focused {
-    background: linear-gradient(135deg, #1a1a1a 0%, #252525 100%);
+    background: #1e1e1e;
     color: #fff;
     border-color: #444;
     transform: scale(1.1);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     will-change: transform;
 }
 .menu-item.focused {
     border-color: #ff3333;
-    box-shadow: 0 0 25px rgba(255,51,51,0.3);
 }
 #sidebar.expanded .menu-item {
     width: 90%;
@@ -192,11 +189,10 @@ body {
     transform: scale(1.06);
     border-color: #fff;
     z-index: 5;
-    box-shadow: 0 15px 50px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.1);
     will-change: transform;
 }
 .video-card.focused {
-    background: linear-gradient(180deg, #1e1e1e 0%, #1a1a1a 100%);
+    background: #1c1c1c;
 }
 
 /* ASPECT RATIO HACK (No aspect-ratio support) */

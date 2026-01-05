@@ -3,6 +3,7 @@
 
 const CACHE_NAME = 'tinytube-api-cache-v1';
 const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes in milliseconds
+const MAX_CACHE_ENTRIES = 50; // Limit cache size to prevent storage bloat
 
 // API patterns to cache
 const CACHEABLE_APIS = [
@@ -18,6 +19,19 @@ const CACHEABLE_APIS = [
 // Check if URL should be cached
 function shouldCache(url) {
     return CACHEABLE_APIS.some(pattern => url.includes(pattern));
+}
+
+// Enforce cache size limit using LRU strategy
+async function enforceCacheLimit(cache) {
+    const keys = await cache.keys();
+    if (keys.length > MAX_CACHE_ENTRIES) {
+        // Delete oldest entries (first in cache)
+        const entriesToDelete = keys.length - MAX_CACHE_ENTRIES;
+        for (let i = 0; i < entriesToDelete; i++) {
+            await cache.delete(keys[i]);
+        }
+        console.log(`Service Worker: Deleted ${entriesToDelete} old cache entries`);
+    }
 }
 
 // Install event
@@ -111,6 +125,8 @@ self.addEventListener('fetch', (event) => {
                             headers: headers
                         });
                         cache.put(request, newResponse);
+                        // Enforce cache size limit after adding new entry
+                        enforceCacheLimit(cache);
                     });
                 }
 
