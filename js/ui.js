@@ -75,7 +75,7 @@ const CardPool = {
             }
             img.style.display = ''; // Clear any display:none from error handler
             img.onerror = null;      // Clear old error handlers
-            img.src = 'icon.png';    // Reset to placeholder
+            img.src = 'default.png';    // Reset to placeholder
             img.removeAttribute('data-src'); // Clear lazy-load marker
         }
 
@@ -357,7 +357,7 @@ const UI = {
             return;
         }
         img.dataset.fallback = "1";
-        img.src = "icon.png";
+        img.src = "default.png";
     },
     renderGrid: (data) => {
         const items = (data || []).filter(item => item && ["video", "channel", "shortVideo", "playlist"].includes(item.type));
@@ -461,7 +461,7 @@ const UI = {
                     div.dataset.poolType = "channel";
                     div.id = `card-${idx}`;
 
-                    let thumbUrl = "icon.png";
+                    let thumbUrl = "default.png";
                     if (item.authorThumbnails && item.authorThumbnails[0]) thumbUrl = item.authorThumbnails[0].url;
 
                     const img = div.querySelector('.c-avatar');
@@ -469,7 +469,7 @@ const UI = {
                         img.onerror = UI.handleImgError;
                         if (useLazy && idx > 7) {
                             img.dataset.src = thumbUrl;
-                            img.src = "icon.png";
+                            img.src = "default.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else {
                             img.src = thumbUrl;
@@ -500,7 +500,7 @@ const UI = {
                     div.dataset.poolType = "video";
                     div.id = `card-${idx}`;
 
-                    let thumbUrl = "icon.png";
+                    let thumbUrl = "default.png";
                     if (item.playlistThumbnail) thumbUrl = item.playlistThumbnail;
                     else if (item.playlistThumbnailUrl) thumbUrl = item.playlistThumbnailUrl;
                     else if (item.thumbnail) thumbUrl = item.thumbnail;
@@ -511,7 +511,7 @@ const UI = {
                         img.onerror = UI.handleImgError;
                         if (useLazy && idx > 7) {
                             img.dataset.src = thumbUrl;
-                            img.src = "icon.png";
+                            img.src = "default.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else {
                             img.src = thumbUrl;
@@ -562,7 +562,7 @@ const UI = {
                     div.dataset.poolType = "video";
                     div.id = `card-${idx}`;
 
-                    let thumbUrl = "icon.png";
+                    let thumbUrl = "default.png";
                     if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
                     else if (item.thumbnail) thumbUrl = item.thumbnail;
 
@@ -571,7 +571,7 @@ const UI = {
                         img.onerror = UI.handleImgError;
                         if (useLazy && idx > 7) {
                             img.dataset.src = thumbUrl;
-                            img.src = "icon.png";
+                            img.src = "default.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else {
                             img.src = thumbUrl;
@@ -635,7 +635,7 @@ const UI = {
                     div.id = `card-${idx}`;
                     div.dataset.poolType = isChannel ? "channel" : "video";
 
-                    let thumbUrl = "icon.png";
+                    let thumbUrl = "default.png";
                     if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
                     else if (item.thumbnail) thumbUrl = item.thumbnail;
                     else if (item.authorThumbnails && item.authorThumbnails[0]) thumbUrl = item.authorThumbnails[0].url;
@@ -645,7 +645,7 @@ const UI = {
                         img.onerror = UI.handleImgError;
                         if (useLazy && idx > 7) {
                             img.dataset.src = thumbUrl;
-                            img.src = "icon.png";
+                            img.src = "default.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else { img.src = thumbUrl; }
                         div.appendChild(img);
@@ -658,7 +658,7 @@ const UI = {
                         img.onerror = UI.handleImgError;
                         if (useLazy && idx > 7) {
                             img.dataset.src = thumbUrl;
-                            img.src = "icon.png";
+                            img.src = "default.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else { img.src = thumbUrl; }
                         tc.appendChild(img);
@@ -682,7 +682,7 @@ const UI = {
                         img.onerror = UI.handleImgError;
                         if (useLazy && idx > 7) {
                             img.dataset.src = thumbUrl;
-                            img.src = "icon.png";
+                            img.src = "default.png";
                             if (TinyTube.App.lazyObserver) TinyTube.App.lazyObserver.observe(img);
                         } else { img.src = thumbUrl; }
                         tc.appendChild(img);
