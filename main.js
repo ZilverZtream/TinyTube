@@ -971,8 +971,9 @@ function setupRemote() {
                     }
                     break;
                 case 403: // RED - Toggle player mode
-                    const vId = Utils.getVideoId(item);
+                    const vId = App.currentVideoId;
                     if (App.playerMode === "BYPASS") {
+                        if (!vId) break;
                         Player.enforce(vId);
                     } else {
                         el("enforcement-container").innerHTML = "";
