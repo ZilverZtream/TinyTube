@@ -150,6 +150,22 @@ const VirtualScroll = {
     scrollHandler: null,
     scrollRAFPending: false,
 
+    getItemsPerRow: function(container) {
+        let itemsPerRow = 4; // Fallback default
+        if (!container) return itemsPerRow;
+
+        const firstCard = container.querySelector('.video-card, .channel-card');
+        if (firstCard && container.clientWidth > 0) {
+            const cardWidth = firstCard.offsetWidth;
+            if (cardWidth > 0) {
+                itemsPerRow = Math.floor(container.clientWidth / cardWidth);
+            }
+        }
+        // Ensure at least 1 card per row
+        if (itemsPerRow < 1) itemsPerRow = 1;
+        return itemsPerRow;
+    },
+
     init: function() {
         const container = document.getElementById('grid-container');
         if (!container) return;
@@ -182,17 +198,7 @@ const VirtualScroll = {
 
         // FIX: Calculate itemsPerRow dynamically instead of hardcoding to 4
         // This prevents "pop-in" glitches if CSS changes (responsive layouts, 4K screens)
-        let itemsPerRow = 4; // Fallback default
-        const firstCard = container.querySelector('.video-card, .channel-card');
-        if (firstCard && container.clientWidth > 0) {
-            const cardWidth = firstCard.offsetWidth;
-            if (cardWidth > 0) {
-                itemsPerRow = Math.floor(container.clientWidth / cardWidth);
-                // Ensure at least 1 card per row
-                if (itemsPerRow < 1) itemsPerRow = 1;
-            }
-        }
-        this.itemsPerRow = itemsPerRow;
+        this.itemsPerRow = this.getItemsPerRow(container);
 
         // Estimate card height (thumbnail + meta, roughly 250px)
         if (this.itemHeight === 0 && firstCard) {
