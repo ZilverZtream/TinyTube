@@ -69,9 +69,11 @@ const App = {
     rafId: null,
     lazyObserver: null,
     supportsSmoothScroll: true,
+    lastFocused: null,
     
     currentVideoId: null,
     currentVideoData: null,
+    currentStreamUrl: null,
     playbackSpeedIdx: 0,
     captionTracks: [],
     infoKeyTimer: null,
@@ -80,6 +82,7 @@ const App = {
     seekKeyTime: 0,
     seekRepeatCount: 0,
     hudTimer: null,
+    lastRenderSec: null,
     
     playerElements: null,
     watchHistory: null,
@@ -191,11 +194,81 @@ const Utils = {
         if (item.thumb) return item.thumb;
         return "icon.png";
     },
-    clamp: (val, min, max) => Math.max(min, Math.min(max, val))
+    clamp: (val, min, max) => Math.max(min, Math.min(max, val)),
+    getFormatHeight: (format) => {
+        if (!format) return 0;
+        if (format.height) return format.height;
+        if (format.qualityLabel) {
+            const match = format.qualityLabel.match(/(\d{3,4})p/i);
+            if (match) return parseInt(match[1], 10);
+        }
+        return 0;
+    },
+    isHighRes: (format) => {
+        const label = (format.qualityLabel || "").toLowerCase();
+        return label.includes("2160") || label.includes("4k") || Utils.getFormatHeight(format) > 1080;
+    },
+    pickPreferredStream: (formats) => {
+        const candidates = (formats || []).filter(f => {
+            if (!f) return false;
+            if (f.container === "mp4") return true;
+            return f.mimeType && f.mimeType.indexOf("video/mp4") !== -1;
+        });
+        const filtered = candidates.filter(f => !Utils.isHighRes(f));
+        const byHeight = (a, b) => Utils.getFormatHeight(b) - Utils.getFormatHeight(a);
+        const prefers = (list) => list.sort(byHeight);
+        const prefer1080 = prefers(filtered.filter(f => Utils.getFormatHeight(f) === 1080));
+        if (prefer1080.length) return prefer1080[0];
+        const prefer720 = prefers(filtered.filter(f => Utils.getFormatHeight(f) === 720));
+        if (prefer720.length) return prefer720[0];
+        const fallback = prefers(filtered);
+        return fallback[0] || null;
+    }
 };
 
 // --- 2. EXTRACTOR (INNERTUBE STEALTH) ---
 const Extractor = {
+    parseCipher: (cipher) => {
+        if (!cipher) return null;
+        const params = new URLSearchParams(cipher);
+        const url = params.get("url");
+        const s = params.get("s");
+        const sp = params.get("sp") || "signature";
+        const sig = params.get("sig") || params.get("signature");
+        return { url, s, sp, sig };
+    },
+    decipherSignature: (sig) => {
+        if (!sig) return "";
+        try {
+            const chars = sig.split("");
+            if (chars.length < 5) return sig;
+            const swap = (arr, idx) => {
+                const pos = idx % arr.length;
+                const tmp = arr[0];
+                arr[0] = arr[pos];
+                arr[pos] = tmp;
+            };
+            swap(chars, 3);
+            chars.reverse();
+            return chars.join("");
+        } catch {
+            return sig;
+        }
+    },
+    resolveFormatUrl: (format) => {
+        if (!format) return "";
+        if (format.url) return format.url;
+        if (format.signatureCipher) {
+            const parsed = Extractor.parseCipher(format.signatureCipher);
+            if (!parsed || !parsed.url) return "";
+            if (parsed.sig) return `${parsed.url}&${parsed.sp}=${parsed.sig}`;
+            if (parsed.s) {
+                const deciphered = Extractor.decipherSignature(parsed.s);
+                return `${parsed.url}&${parsed.sp}=${deciphered}`;
+            }
+        }
+        return "";
+    },
     extractInnertube: async (videoId) => {
         try {
             const body = {
@@ -241,15 +314,14 @@ const Extractor = {
 
             const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
 
-            var best = formats.filter(function(f) { return f.url && f.mimeType && f.mimeType.indexOf("video/mp4") !== -1 && f.audioQuality; })
-                              .sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); })[0];
+            const resolvedFormats = formats.map((format) => {
+                const url = Extractor.resolveFormatUrl(format);
+                return url ? Object.assign({}, format, { resolvedUrl: url }) : null;
+            }).filter(Boolean);
 
-            if (!best) {
-                best = formats.filter(function(f) { return f.url && f.mimeType && f.mimeType.indexOf("video/mp4") !== -1; })
-                              .sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); })[0];
-            }
-
-            if (!best || !best.url) throw new Error("No direct URL");
+            let best = Utils.pickPreferredStream(resolvedFormats.filter(f => f.resolvedUrl && f.audioQuality));
+            if (!best) best = Utils.pickPreferredStream(resolvedFormats);
+            if (!best || !best.resolvedUrl) throw new Error("No direct URL");
 
             var captionTracks = data.captions && data.captions.playerCaptionsTracklistRenderer && data.captions.playerCaptionsTracklistRenderer.captionTracks;
             var captions = captionTracks ? captionTracks.map(function(c) {
@@ -263,7 +335,7 @@ const Extractor = {
 
             var publishDate = data.microformat && data.microformat.playerMicroformatRenderer && data.microformat.playerMicroformatRenderer.publishDate;
             return {
-                url: best.url + "&alr=yes",
+                url: best.resolvedUrl + "&alr=yes",
                 meta: {
                     title: data.videoDetails.title,
                     author: data.videoDetails.author,
@@ -402,9 +474,11 @@ const Feed = {
             const res = await Utils.fetchDedup(`${App.api}${endpoint}`);
             if (!res.ok) throw new Error();
             const data = await res.json();
-            UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
+            const rendered = UI.renderGrid(Array.isArray(data) ? data : (data.items || []));
+            return { ok: true, hasItems: rendered };
         } catch {
             el("grid-container").innerHTML = '<div class="network-error"><h3>Connection Failed</h3><p>Perditum may be busy.</p></div>';
+            return { ok: false, hasItems: false };
         }
     },
     renderSubs: () => {
@@ -451,7 +525,7 @@ const UI = {
 
         if (App.items.length === 0) {
             grid.innerHTML = '<div class="empty-state"><h3>No Results</h3></div>';
-            return;
+            return false;
         }
 
         const frag = document.createDocumentFragment();
@@ -518,15 +592,25 @@ const UI = {
             App.focus = { area: "grid", index: 0 };
             UI.updateFocus();
         }
+        return true;
     },
     updateFocus: () => {
-        document.querySelectorAll(".focused").forEach(e => e.classList.remove("focused"));
+        if (App.lastFocused) {
+            App.lastFocused.classList.remove("focused");
+            App.lastFocused.classList.remove("focused-btn");
+        }
+        App.lastFocused = null;
         if (App.focus.area === "menu") {
-            el(["menu-home", "menu-subs", "menu-search", "menu-settings"][App.menuIdx]).classList.add("focused");
+            const menuItem = el(["menu-home", "menu-subs", "menu-search", "menu-settings"][App.menuIdx]);
+            if (menuItem) {
+                menuItem.classList.add("focused");
+                App.lastFocused = menuItem;
+            }
         } else if (App.focus.area === "grid") {
             const card = el(`card-${App.focus.index}`);
             if (card) {
                 card.classList.add("focused");
+                App.lastFocused = card;
                 try {
                     if (App.supportsSmoothScroll) card.scrollIntoView({ block: "center", behavior: "smooth" });
                     else card.scrollIntoView(false);
@@ -537,8 +621,19 @@ const UI = {
                 const item = App.items[App.focus.index];
                 if (item && item.type !== "channel" && !item.deArrowChecked) UI.fetchDeArrow(item, App.focus.index);
             }
-        } else if (App.focus.area === "search") el("search-input").classList.add("focused");
-        else if (App.focus.area === "settings") el("save-btn").classList.add("focused-btn");
+        } else if (App.focus.area === "search") {
+            const searchInput = el("search-input");
+            if (searchInput) {
+                searchInput.classList.add("focused");
+                App.lastFocused = searchInput;
+            }
+        } else if (App.focus.area === "settings") {
+            const saveBtn = el("save-btn");
+            if (saveBtn) {
+                saveBtn.classList.add("focused-btn");
+                App.lastFocused = saveBtn;
+            }
+        }
 
         if (App.view === "PLAYER" && App.activeLayer === "CONTROLS") {
             PlayerControls.updateFocus();
@@ -672,6 +767,8 @@ const Player = {
         App.playerControls.index = 0;
         App.activeLayer = "NONE";
         App.currentVideoData = null;
+        App.currentStreamUrl = null;
+        App.lastRenderSec = null;
         
         el("player-layer").classList.remove("hidden");
         el("player-hud").classList.add("visible");
@@ -691,6 +788,8 @@ const Player = {
         Player.clearCaptions();
 
         const p = App.playerElements.player;
+        p.pause();
+        p.src = "";
         let posterUrl = "";
         if (item.videoThumbnails && item.videoThumbnails[0]) posterUrl = item.videoThumbnails[0].url;
         else if (item.thumbnail) posterUrl = item.thumbnail;
@@ -703,21 +802,23 @@ const Player = {
             .then(r=>r.json()).then(s => { if(Array.isArray(s)) App.sponsorSegs=s.sort((a,b)=>a.segment[0]-b.segment[0]); })
             .catch(()=>{});
 
+        const isCurrent = () => App.view === "PLAYER" && App.currentVideoId === vId;
         let streamUrl = null;
 
-        if (!streamUrl && App.api) {
+        if (App.api) {
             try {
                 const res = await Utils.fetchWithTimeout(`${App.api}/videos/${vId}`);
-                if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
+                if (!isCurrent()) return;
                 if (res.ok) {
                     const data = await res.json();
+                    if (!isCurrent()) return;
                     App.currentVideoData = data;
                     Player.setupCaptions(data);
-                    
-                    // SAFETY GUARD (v11.1)
-                    const format = (data.formatStreams || []).find(s=>s.qualityLabel==="1080p"||s.container==="mp4") || (data.formatStreams || [])[0];
-                    if(format) {
-                        streamUrl = format.url;
+
+                    const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
+                    const preferred = Utils.pickPreferredStream(formats);
+                    if (preferred && preferred.url) {
+                        streamUrl = preferred.url;
                         Utils.toast("Src: API");
                     }
                 }
@@ -727,7 +828,7 @@ const Player = {
         if (!streamUrl) {
             try {
                 const direct = await Extractor.extractInnertube(vId);
-                if (App.view !== "PLAYER" || App.currentVideoId !== vId) return;
+                if (!isCurrent()) return;
                 if (direct && direct.url) {
                     streamUrl = direct.url;
                     App.currentVideoData = direct.meta;
@@ -738,6 +839,7 @@ const Player = {
         }
 
         if (streamUrl) {
+            App.currentStreamUrl = streamUrl;
             p.src = streamUrl;
             p.style.display = "block";
             const savedPos = DB.getPosition(vId);
@@ -757,7 +859,8 @@ const Player = {
         const p = App.playerElements.player;
         p.style.display = "none";
         p.pause();
-        p.src = "";
+        if (App.rafId) cancelAnimationFrame(App.rafId);
+        App.rafId = null;
         el("enforcement-container").innerHTML = `
             <iframe src="https://www.youtube.com/embed/${vId}?autoplay=1&playsinline=1" 
                     width="100%" height="100%" frameborder="0" 
@@ -767,21 +870,37 @@ const Player = {
     },
     setupHUD: (p) => {
         const show = () => HUD.show();
-        p.onplay = () => { App.playerElements.bufferingSpinner.classList.add("hidden"); show(); };
+        p.onplay = () => {
+            App.playerElements.bufferingSpinner.classList.add("hidden");
+            show();
+            if (!App.rafId && App.playerMode === "BYPASS") App.rafId = requestAnimationFrame(Player.renderLoop);
+        };
         p.onpause = show;
         p.onseeked = show;
         p.onwaiting = () => App.playerElements.bufferingSpinner.classList.remove("hidden");
         p.onplaying = () => App.playerElements.bufferingSpinner.classList.add("hidden");
     },
     renderLoop: () => {
-        if (App.view !== "PLAYER") { if(App.rafId) cancelAnimationFrame(App.rafId); return; }
+        if (App.view !== "PLAYER") {
+            if(App.rafId) cancelAnimationFrame(App.rafId);
+            App.rafId = null;
+            return;
+        }
         const p = App.playerElements.player;
-        if (!p.paused && !isNaN(p.duration)) {
-            const pe = App.playerElements;
-            pe.progressFill.style.transform = `scaleX(${p.currentTime / p.duration})`;
-            pe.currTime.textContent = Utils.formatTime(p.currentTime);
-            pe.totalTime.textContent = Utils.formatTime(p.duration);
-            if(p.buffered.length) pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / p.duration})`;
+        if (App.playerMode === "ENFORCE" || p.paused) {
+            App.rafId = null;
+            return;
+        }
+        if (!isNaN(p.duration)) {
+            const currentSec = Math.floor(p.currentTime);
+            if (currentSec !== App.lastRenderSec) {
+                App.lastRenderSec = currentSec;
+                const pe = App.playerElements;
+                pe.progressFill.style.transform = `scaleX(${p.currentTime / p.duration})`;
+                pe.currTime.textContent = Utils.formatTime(p.currentTime);
+                pe.totalTime.textContent = Utils.formatTime(p.duration);
+                if(p.buffered.length) pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / p.duration})`;
+            }
             const s = Utils.findSegment(p.currentTime);
             if (s && s !== App.lastSkippedSeg) {
                 App.lastSkippedSeg = s;
@@ -849,6 +968,8 @@ const Player = {
         Comments.reset(); Comments.close();
         if(App.rafId) cancelAnimationFrame(App.rafId);
         App.rafId = null;
+        App.lastRenderSec = null;
+        App.currentStreamUrl = null;
         Player.clearCaptions();
         ScreenSaver.restore();
     }
@@ -863,11 +984,19 @@ App.actions = {
         if(App.menuIdx===2) { App.focus.area="search"; el("search-input").classList.remove("hidden"); el("search-input").focus(); }
         if(App.menuIdx===3) { App.view="SETTINGS"; el("settings-overlay").classList.remove("hidden"); }
     },
-    runSearch: () => {
-        const q = el("search-input").value;
-        el("search-input").blur();
-        el("search-input").classList.add("hidden");
-        Feed.fetch(`/search?q=${encodeURIComponent(q)}`);
+    runSearch: async () => {
+        const input = el("search-input");
+        const q = input.value.trim();
+        if (!q) return;
+        const result = await Feed.fetch(`/search?q=${encodeURIComponent(q)}`);
+        if (result && result.ok && result.hasItems) {
+            input.blur();
+            input.classList.add("hidden");
+            App.focus.area = "grid";
+            UI.updateFocus();
+        } else {
+            input.focus();
+        }
     },
     saveSettings: () => {
         const name = el("profile-name-input").value.trim();
@@ -1159,7 +1288,20 @@ function setupRemote() {
                     } break;
                 case 412: if (App.playerMode === "BYPASS") Player.seek('left'); break;
                 case 417: if (App.playerMode === "BYPASS") Player.seek('right'); break;
-                case 403: const vId = App.currentVideoId; if(App.playerMode==="BYPASS") Player.enforce(vId); else { el("enforcement-container").innerHTML=""; p.style.display="block"; p.play(); App.playerMode="BYPASS"; } break;
+                case 403: {
+                    const vId = App.currentVideoId;
+                    if(App.playerMode==="BYPASS") {
+                        Player.enforce(vId);
+                    } else {
+                        el("enforcement-container").innerHTML="";
+                        if (!p.src && App.currentStreamUrl) p.src = App.currentStreamUrl;
+                        p.style.display="block";
+                        p.play();
+                        App.playerMode="BYPASS";
+                        if (!App.rafId) App.rafId = requestAnimationFrame(Player.renderLoop);
+                    }
+                    break;
+                }
                 case 404: if (App.playerMode === "BYPASS") Player.cycleSpeed(); break;
                 case 405: Comments.open(); break;
                 case 406: const i=App.items[App.focus.index]; if(i) DB.toggleSub(i.authorId, i.author, Utils.getAuthorThumb(i)); break;
@@ -1247,6 +1389,7 @@ window.onload = async () => {
     UI.initLazyObserver();
     Comments.init();
     PlayerControls.init();
+    App.supportsSmoothScroll = !(typeof tizen !== 'undefined' || /tizen/i.test(navigator.userAgent));
     if (typeof tizen !== 'undefined') {
         ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', '0', '1', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'Return', 'Info'].forEach(k => { try { tizen.tvinputdevice.registerKey(k); } catch (e) {} });
     }
