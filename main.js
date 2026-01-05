@@ -1451,13 +1451,32 @@ App.actions = {
         localStorage.setItem("tt_pid", (App.profileId + 1) % 3);
         location.reload();
     },
-    saveSettings: () => {
+    saveSettings: async () => {
         const name = el("profile-name-input").value.trim();
         const api = el("api-input").value.trim();
         if (name) DB.saveProfileName(name.substring(0, 20));
-        if (api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
-        else localStorage.removeItem("customBase");
-        location.reload();
+        if (!api) {
+            localStorage.removeItem("customBase");
+            location.reload();
+            return;
+        }
+
+        let base = api.replace(/\/+$/, "");
+        if (!base.endsWith("/api/v1")) base = `${base}/api/v1`;
+
+        if (!Utils.isValidUrl(base)) {
+            Utils.toast("Invalid API URL");
+            return;
+        }
+
+        try {
+            const res = await Utils.fetchWithTimeout(`${base}/trending`, {}, 2500);
+            if (!res || !res.ok) throw new Error("API check failed");
+            localStorage.setItem("customBase", base);
+            location.reload();
+        } catch (e) {
+            Utils.toast("API check failed");
+        }
     }
 };
 
