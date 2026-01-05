@@ -987,10 +987,15 @@ const Player = {
             if (currentSec !== App.lastRenderSec) {
                 App.lastRenderSec = currentSec;
                 const pe = App.playerElements;
-                pe.progressFill.style.transform = `scaleX(${p.currentTime / p.duration})`;
+                const hasFiniteDuration = isFinite(p.duration) && p.duration > 0;
+                if (hasFiniteDuration) {
+                    pe.progressFill.style.transform = `scaleX(${p.currentTime / p.duration})`;
+                }
                 pe.currTime.textContent = Utils.formatTime(p.currentTime);
                 pe.totalTime.textContent = Utils.formatTime(p.duration);
-                if(p.buffered.length) pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / p.duration})`;
+                if (hasFiniteDuration && p.buffered.length) {
+                    pe.bufferFill.style.transform = `scaleX(${p.buffered.end(p.buffered.length-1) / p.duration})`;
+                }
             }
             const s = Utils.findSegment(p.currentTime);
             if (s && s !== App.lastSkippedSeg) {
