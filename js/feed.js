@@ -3,6 +3,8 @@
     const CONFIG = TinyTube.CONFIG;
     const Utils = TinyTube.Utils;
     const el = TinyTube.el;
+    const TrendingTabs = TinyTube.TrendingTabs;
+    const VirtualScroll = TinyTube.VirtualScroll;
 
 const Feed = {
     loadHome: async () => {
