@@ -360,6 +360,9 @@ const Player = {
     start: async (item, retryCount = 0) => {
         if (!item) return;
 
+        // FIX: Clean up any existing embed listeners/timeouts from previous video
+        Player.cleanupEmbedResources();
+
         // Disconnect lazy observer when entering player
         if (TinyTube.App.lazyObserver) {
             TinyTube.App.lazyObserver.disconnect();
@@ -425,10 +428,26 @@ const Player = {
         let streamUrl = null;
         let apiPromise = null;
 
+        // FIX: Check cache with timestamp validation (30 min expiry)
         if (TinyTube.App.streamCache && TinyTube.App.streamCache.has(vId)) {
-            streamUrl = TinyTube.App.streamCache.get(vId);
-            console.log("Player: Cache Hit for " + vId);
-            TinyTube.Utils.toast("Src: Preload");
+            const cached = TinyTube.App.streamCache.get(vId);
+            const CACHE_TTL = 1800000; // 30 minutes in milliseconds
+
+            // Check if cache entry has timestamp and is not expired
+            if (cached && typeof cached === 'object' && cached.url && cached.ts) {
+                if (Date.now() - cached.ts < CACHE_TTL) {
+                    streamUrl = cached.url;
+                    console.log("Player: Cache Hit for " + vId);
+                    TinyTube.Utils.toast("Src: Preload");
+                } else {
+                    console.log("Player: Cache Expired for " + vId);
+                    TinyTube.App.streamCache.delete(vId);
+                }
+            } else if (typeof cached === 'string') {
+                // Legacy cache format (just URL string) - assume expired for safety
+                console.log("Player: Legacy cache format, treating as expired");
+                TinyTube.App.streamCache.delete(vId);
+            }
         }
 
         const hydrateFromApi = async () => {
@@ -800,7 +819,11 @@ const Player = {
                             const cappedFormats = TinyTube.Utils.applyResolutionCap(formats);
                             const preferred = TinyTube.Utils.pickPreferredStream(cappedFormats);
                             if (preferred && preferred.url) {
-                                TinyTube.App.streamCache.set(vId, preferred.url);
+                                // FIX: Store URL with timestamp to prevent using expired URLs
+                                TinyTube.App.streamCache.set(vId, {
+                                    url: preferred.url,
+                                    ts: Date.now()
+                                });
                                 console.log('Preloaded next video:', vId);
                             }
                         }

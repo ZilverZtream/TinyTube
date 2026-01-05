@@ -16,40 +16,45 @@ const CardPool = {
     getChannel: function() {
         return this.channelPool.pop() || null;
     },
-    release: function(element) {
+    release: function(element, skipFocus = false) {
         if (!element) return;
-        const activeElement = document.activeElement;
-        if (activeElement && (activeElement === element || element.contains(activeElement))) {
-            const grid = el("grid-container");
-            let fallback = null;
-            if (grid) {
-                fallback = element.nextElementSibling || element.previousElementSibling;
-                if (!fallback || !fallback.matches('.video-card, .channel-card')) {
-                    fallback = grid.querySelector('.video-card, .channel-card');
-                }
-            }
 
-            if (fallback) {
-                const idParts = fallback.id ? fallback.id.split('-') : [];
-                const idx = parseInt(idParts[1], 10);
-                TinyTube.App.focus.area = "grid";
-                TinyTube.App.focus.index = Number.isNaN(idx) ? 0 : idx;
-                if (typeof fallback.focus === "function") {
-                    fallback.focus();
+        // Only handle focus if not skipped (will be handled by releaseAll)
+        if (!skipFocus) {
+            const activeElement = document.activeElement;
+            if (activeElement && (activeElement === element || element.contains(activeElement))) {
+                const grid = el("grid-container");
+                let fallback = null;
+                if (grid) {
+                    fallback = element.nextElementSibling || element.previousElementSibling;
+                    if (!fallback || !fallback.matches('.video-card, .channel-card')) {
+                        fallback = grid.querySelector('.video-card, .channel-card');
+                    }
                 }
-                UI.updateFocus();
-            } else {
-                const menuHome = el("menu-home");
-                if (menuHome) {
-                    TinyTube.App.focus.area = "menu";
-                    TinyTube.App.menuIdx = 0;
-                    if (typeof menuHome.focus === "function") {
-                        menuHome.focus();
+
+                if (fallback) {
+                    const idParts = fallback.id ? fallback.id.split('-') : [];
+                    const idx = parseInt(idParts[1], 10);
+                    TinyTube.App.focus.area = "grid";
+                    TinyTube.App.focus.index = Number.isNaN(idx) ? 0 : idx;
+                    if (typeof fallback.focus === "function") {
+                        fallback.focus();
                     }
                     UI.updateFocus();
+                } else {
+                    const menuHome = el("menu-home");
+                    if (menuHome) {
+                        TinyTube.App.focus.area = "menu";
+                        TinyTube.App.menuIdx = 0;
+                        if (typeof menuHome.focus === "function") {
+                            menuHome.focus();
+                        }
+                        UI.updateFocus();
+                    }
                 }
             }
         }
+
         if (element.parentNode) {
             element.parentNode.removeChild(element);
         }
@@ -73,8 +78,48 @@ const CardPool = {
     },
     releaseAll: function(container) {
         if (!container) return;
+
+        // FIX: Detect if any card currently has focus BEFORE the loop
+        const activeElement = document.activeElement;
+        let needsFocusRestore = false;
         const cards = container.querySelectorAll('.video-card, .channel-card');
-        cards.forEach(card => this.release(card));
+
+        // Check if focus is on any card we're about to release
+        cards.forEach(card => {
+            if (activeElement && (activeElement === card || card.contains(activeElement))) {
+                needsFocusRestore = true;
+            }
+        });
+
+        // Release all cards WITHOUT moving focus (skip focus handling)
+        cards.forEach(card => this.release(card, true));
+
+        // AFTER the loop, restore focus once to prevent 50+ reflows
+        if (needsFocusRestore) {
+            const grid = el("grid-container");
+            const remainingCard = grid ? grid.querySelector('.video-card, .channel-card') : null;
+
+            if (remainingCard) {
+                const idParts = remainingCard.id ? remainingCard.id.split('-') : [];
+                const idx = parseInt(idParts[1], 10);
+                TinyTube.App.focus.area = "grid";
+                TinyTube.App.focus.index = Number.isNaN(idx) ? 0 : idx;
+                if (typeof remainingCard.focus === "function") {
+                    remainingCard.focus();
+                }
+                UI.updateFocus();
+            } else {
+                const menuHome = el("menu-home");
+                if (menuHome) {
+                    TinyTube.App.focus.area = "menu";
+                    TinyTube.App.menuIdx = 0;
+                    if (typeof menuHome.focus === "function") {
+                        menuHome.focus();
+                    }
+                    UI.updateFocus();
+                }
+            }
+        }
     }
 };
 
@@ -87,6 +132,7 @@ const VirtualScroll = {
     itemHeight: 0,
     containerHeight: 0,
     scrollHandler: null,
+    scrollRAFPending: false,
 
     init: function() {
         const container = document.getElementById('grid-container');
@@ -97,8 +143,17 @@ const VirtualScroll = {
             container.removeEventListener('scroll', this.scrollHandler);
         }
 
-        // Create throttled scroll handler
-        this.scrollHandler = TinyTube.Utils.throttle(() => this.updateVisible(), 16); // 60fps
+        // FIX: Use RAF lock instead of throttle to prevent double-queuing
+        // (throttle uses setTimeout, updateVisible uses RAF - this caused 1-2 frame lag)
+        this.scrollHandler = () => {
+            if (!this.scrollRAFPending) {
+                this.scrollRAFPending = true;
+                requestAnimationFrame(() => {
+                    this.updateVisible();
+                    this.scrollRAFPending = false;
+                });
+            }
+        };
         container.addEventListener('scroll', this.scrollHandler, { passive: true });
     },
 
@@ -589,6 +644,19 @@ const SearchFilters = {
     hide: () => {
         el("search-filters").classList.add("hidden");
         TinyTube.App.filterFocusIndex = 0;
+
+        // FIX: Restore focus to search input or grid to prevent focus trap
+        const searchInput = el("search-input");
+        if (searchInput) {
+            TinyTube.App.focus.area = "search";
+            searchInput.focus();
+            TinyTube.UI.updateFocus();
+        } else {
+            // Fallback to grid if search input not available
+            TinyTube.App.focus.area = "grid";
+            TinyTube.App.focus.index = 0;
+            TinyTube.UI.updateFocus();
+        }
     },
     updateUI: () => {
         const filters = TinyTube.App.searchFilters;
