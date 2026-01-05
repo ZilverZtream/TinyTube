@@ -149,6 +149,7 @@ const VirtualScroll = {
     itemHeight: 0,
     containerHeight: 0,
     itemsPerRow: 1,
+    onRangeChange: null,
     scrollHandler: null,
     scrollRAFPending: false,
 
@@ -249,6 +250,8 @@ const VirtualScroll = {
         const container = document.getElementById('grid-container');
         if (!container) return;
         const { start, end } = this.calculateVisible();
+        const prevStart = this.visibleStart;
+        const prevEnd = this.visibleEnd;
 
         // Only update if range changed significantly
         if (Math.abs(start - this.visibleStart) < 4 && Math.abs(end - this.visibleEnd) < 4) {
@@ -257,6 +260,10 @@ const VirtualScroll = {
 
         this.visibleStart = start;
         this.visibleEnd = end;
+
+        if (typeof this.onRangeChange === "function") {
+            this.onRangeChange({ start, end, prevStart, prevEnd });
+        }
 
         const { topSpacer, bottomSpacer } = this.ensureSpacers(container);
         const totalRows = Math.ceil(this.totalItems / this.itemsPerRow);
@@ -738,6 +745,25 @@ const UI = {
             } else {
                 grid.appendChild(frag);
             }
+
+            if (TinyTube.App.focus.area === "grid" && end > start) {
+                let focusIndex = TinyTube.App.focus.index;
+                let focusCard = el(`card-${focusIndex}`);
+                if (!focusCard) {
+                    const clampedIndex = TinyTube.Utils.clamp(focusIndex, start, end - 1);
+                    if (clampedIndex !== focusIndex) {
+                        TinyTube.App.focus.index = clampedIndex;
+                        focusIndex = clampedIndex;
+                    }
+                    focusCard = el(`card-${focusIndex}`);
+                }
+
+                if (focusCard && (!TinyTube.App.lastFocused || TinyTube.App.lastFocused.id !== focusCard.id)) {
+                    requestAnimationFrame(() => {
+                        UI.updateFocus();
+                    });
+                }
+            }
         });
     },
     updateFocus: () => {
@@ -821,6 +847,17 @@ const UI = {
             if (t) t.textContent = d.titles[0].title;
             TinyTube.App.items[idx].title = d.titles[0].title;
         }
+    }
+};
+
+VirtualScroll.onRangeChange = ({ start, end, prevStart, prevEnd }) => {
+    if (TinyTube.App.focus.area !== "grid") return;
+    if (end <= start) return;
+    const focusIndex = TinyTube.App.focus.index;
+    const wasVisible = focusIndex >= prevStart && focusIndex < prevEnd;
+    const nowVisible = focusIndex >= start && focusIndex < end;
+    if (wasVisible && !nowVisible) {
+        TinyTube.App.focus.index = TinyTube.Utils.clamp(focusIndex, start, end - 1);
     }
 };
 
