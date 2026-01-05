@@ -77,7 +77,10 @@ self.addEventListener('fetch', (event) => {
                 if (cachedResponse) {
                     // Check if cache is still fresh
                     const cachedTime = cachedResponse.headers.get('sw-cached-time');
-                    if (cachedTime) {
+                    if (!cachedTime || Number.isNaN(parseInt(cachedTime, 10))) {
+                        console.log('Service Worker: Cache timestamp missing/invalid, invalidating:', url);
+                        await cache.delete(request);
+                    } else {
                         const age = Date.now() - parseInt(cachedTime, 10);
                         if (age < CACHE_DURATION) {
                             console.log('Service Worker: Serving from cache:', url);

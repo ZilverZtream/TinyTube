@@ -107,6 +107,7 @@ LRUCache.prototype.set = function(key, val) {
     this.map.set(key, val);
 };
 LRUCache.prototype.has = function(key) { return this.map.has(key); };
+LRUCache.prototype.delete = function(key) { return this.map.delete(key); };
 
 // --- WEB WORKER FOR JSON PARSING ---
 const WorkerPool = {
@@ -360,7 +361,12 @@ const Utils = {
         return e;
     },
     safeParse: (str, def) => {
-        try { return JSON.parse(str) || def; } catch { return def; }
+        try {
+            const parsed = JSON.parse(str);
+            return parsed === undefined ? def : parsed;
+        } catch {
+            return def;
+        }
     },
     throttle: (func, wait) => PerformanceUtils.throttle(func, wait),
     debounce: (func, wait) => PerformanceUtils.debounce(func, wait),
@@ -370,31 +376,55 @@ const Utils = {
         // Manually setting this header converts "Simple Request" to "Complex Request"
         // which forces an OPTIONS preflight, adding 200-500ms latency per request
         return new Promise((resolve, reject) => {
+            const controller = new AbortController();
+            const originalSignal = options.signal;
             let timedOut = false;
+            let abortHandler = null;
+            const cleanup = () => {
+                if (abortHandler && originalSignal) {
+                    originalSignal.removeEventListener('abort', abortHandler);
+                }
+            };
             const timer = setTimeout(() => {
                 timedOut = true;
+                controller.abort();
+                cleanup();
                 reject(new Error('Fetch timeout'));
             }, timeout);
 
             // Handle abort signal cleanup
-            const signal = options.signal;
-            if (signal) {
-                signal.addEventListener('abort', () => {
+            if (originalSignal) {
+                abortHandler = () => {
                     if (!timedOut) {
                         clearTimeout(timer);
+                        controller.abort();
+                        cleanup();
                         reject(new DOMException('Aborted', 'AbortError'));
                     }
-                });
+                };
+                originalSignal.addEventListener('abort', abortHandler);
             }
 
-            fetch(url, options).then(res => {
-                if (!timedOut) { clearTimeout(timer); resolve(res); }
+            const mergedOptions = Object.assign({}, options, { signal: controller.signal });
+            fetch(url, mergedOptions).then(res => {
+                if (!timedOut) {
+                    clearTimeout(timer);
+                    cleanup();
+                    resolve(res);
+                }
             }).catch(err => {
-                if (!timedOut) { clearTimeout(timer); reject(err); }
+                if (!timedOut) {
+                    clearTimeout(timer);
+                    cleanup();
+                    reject(err);
+                }
             });
         });
     },
     fetchDedup: async (url, options = {}, timeout = CONFIG.TIMEOUT) => {
+        if (options.signal) {
+            return Utils.fetchWithTimeout(url, options, timeout);
+        }
         const buildCacheKey = () => {
             try {
                 const method = (options.method || 'GET').toUpperCase();
