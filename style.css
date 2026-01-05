@@ -730,6 +730,74 @@ iframe {
 .comments-list::-webkit-scrollbar-track { background: transparent; }
 .comments-list::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
 
+/* CAPTIONS OVERLAY */
+#captions-overlay {
+    position: absolute;
+    top: 80px;
+    right: 60px;
+    width: 32%;
+    max-height: 60%;
+    background: rgba(0,0,0,0.92);
+    border-radius: 16px;
+    z-index: 106;
+    border: 1px solid #333;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    display: flex;
+}
+.captions-panel {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 22px 26px 18px;
+    box-sizing: border-box;
+}
+.captions-header h2 {
+    margin: 0 0 6px 0;
+    font-size: 24px;
+    font-weight: 600;
+    color: #fff;
+}
+.captions-meta {
+    font-size: 13px;
+    color: #888;
+}
+.captions-list {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+.captions-option {
+    background: #1b1b1b;
+    color: #ddd;
+    border: 1px solid #2b2b2b;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s ease, border 0.2s ease;
+}
+.captions-option:hover,
+.captions-option:focus {
+    background: #252525;
+    border-color: #444;
+    outline: none;
+}
+.captions-option.active {
+    border-color: #ff3333;
+    color: #fff;
+}
+.captions-option:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.captions-list::-webkit-scrollbar { width: 4px; }
+.captions-list::-webkit-scrollbar-track { background: transparent; }
+.captions-list::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+
 /* TOAST */
 #toast {
     position: fixed;
