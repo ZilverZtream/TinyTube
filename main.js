@@ -477,7 +477,12 @@ const el = (id) => {
     if (App.cachedElements && App.cachedElements[id]) {
         return App.cachedElements[id];
     }
-    return document.getElementById(id);
+    const element = document.getElementById(id);
+    // Cache the element for future lookups
+    if (element && App.cachedElements) {
+        App.cachedElements[id] = element;
+    }
+    return element;
 };
 
 // --- SAFE STORAGE WRAPPER ---
@@ -1295,19 +1300,58 @@ const UI = {
         };
     },
     initLazyObserver: () => {
-        if (!("IntersectionObserver" in window)) return;
-        App.lazyObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    const img = entry.target;
-                    if (img.dataset.src) {
+        if ("IntersectionObserver" in window) {
+            App.lazyObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const img = entry.target;
+                        if (img.dataset.src) {
+                            img.src = img.dataset.src;
+                            img.removeAttribute("data-src");
+                            App.lazyObserver.unobserve(img);
+                        }
+                    }
+                });
+            }, { rootMargin: `${CONFIG.LAZY_OBSERVER_MARGIN_PX}px` });
+        } else {
+            // Fallback for Chromium 56 (Tizen 4) - use scroll-based lazy loading
+            const container = el("grid-container");
+            if (!container) return;
+
+            const loadVisibleImages = () => {
+                const images = container.querySelectorAll('img[data-src]');
+                const containerRect = container.getBoundingClientRect();
+
+                images.forEach(img => {
+                    const rect = img.getBoundingClientRect();
+                    // Check if image is within viewport + margin
+                    const inView = (
+                        rect.top < containerRect.bottom + CONFIG.LAZY_OBSERVER_MARGIN_PX &&
+                        rect.bottom > containerRect.top - CONFIG.LAZY_OBSERVER_MARGIN_PX
+                    );
+
+                    if (inView && img.dataset.src) {
                         img.src = img.dataset.src;
                         img.removeAttribute("data-src");
-                        App.lazyObserver.unobserve(img);
                     }
+                });
+            };
+
+            // Throttled scroll handler for fallback lazy loading
+            const throttledLoad = Utils.throttle(loadVisibleImages, 100);
+            container.addEventListener('scroll', throttledLoad, { passive: true });
+
+            // Store cleanup reference
+            App.lazyObserver = {
+                observe: () => {}, // Noop for compatibility
+                disconnect: () => {
+                    container.removeEventListener('scroll', throttledLoad);
                 }
-            });
-        }, { rootMargin: `${CONFIG.LAZY_OBSERVER_MARGIN_PX}px` });
+            };
+
+            // Initial load
+            setTimeout(loadVisibleImages, 100);
+        }
     },
     // FIX: Named function to prevent closure memory leaks
     handleImgError: (e) => {
@@ -1364,7 +1408,25 @@ const UI = {
             const frag = document.createDocumentFragment();
             const useLazy = App.lazyObserver !== null;
 
+            // Get existing cards to check what needs updating
+            const existingCards = new Set();
+            if (VirtualScroll.enabled) {
+                const currentCards = grid.querySelectorAll('[id^="card-"]');
+                currentCards.forEach(card => {
+                    const idx = parseInt(card.id.split('-')[1], 10);
+                    if (idx < start || idx >= end) {
+                        // Card is outside visible range, return to pool
+                        CardPool.release(card);
+                    } else {
+                        existingCards.add(idx);
+                    }
+                });
+            }
+
             for (let idx = start; idx < end && idx < App.items.length; idx++) {
+                // Skip if card already exists in visible range
+                if (existingCards.has(idx)) continue;
+
                 const item = App.items[idx];
 
                 // Try to get card from pool
@@ -1387,7 +1449,7 @@ const UI = {
                     if (useLazy && idx > 7) {
                         img.dataset.src = thumbUrl;
                         img.src = "icon.png";
-                        App.lazyObserver.observe(img);
+                        if (App.lazyObserver) App.lazyObserver.observe(img);
                     } else { img.src = thumbUrl; }
                     div.appendChild(img);
                     div.appendChild(Utils.create("h3", null, item.author));
@@ -1399,7 +1461,7 @@ const UI = {
                     if (useLazy && idx > 7) {
                         img.dataset.src = thumbUrl;
                         img.src = "icon.png";
-                        App.lazyObserver.observe(img);
+                        if (App.lazyObserver) App.lazyObserver.observe(img);
                     } else { img.src = thumbUrl; }
                     tc.appendChild(img);
                     if (item.lengthSeconds) tc.appendChild(Utils.create("span", "duration-badge", Utils.formatTime(item.lengthSeconds)));
@@ -1421,8 +1483,8 @@ const UI = {
                 frag.appendChild(div);
             }
 
-            if (VirtualScroll.enabled) {
-                // Clear and re-add for virtual scrolling
+            // Only clear grid if NOT using virtual scrolling
+            if (!VirtualScroll.enabled) {
                 CardPool.releaseAll(grid);
                 grid.textContent = "";
             }
@@ -2236,13 +2298,19 @@ const Player = {
     updateHud: (p, forceTextUpdate = false) => {
         if (!App.playerElements) return;
 
+        const hud = el("player-hud");
+        const isHudVisible = hud && hud.classList.contains("visible");
+
+        // Skip expensive updates if HUD is not visible
+        if (!isHudVisible && !forceTextUpdate) return;
+
         const currentSec = Math.floor(p.currentTime);
         const duration = p.duration;
         const pe = App.playerElements;
         const hasFiniteDuration = isFinite(duration) && duration > 0;
 
-        // Always update progress bar for smooth animation
-        if (hasFiniteDuration && pe.progressFill) {
+        // Update progress bar only when HUD visible (smooth animation)
+        if (isHudVisible && hasFiniteDuration && pe.progressFill) {
             pe.progressFill.style.transform = `scaleX(${p.currentTime / duration})`;
         }
 
@@ -3050,6 +3118,9 @@ window.onload = async () => {
     }, CONFIG.RESIZE_DEBOUNCE_MS);
     window.addEventListener('resize', handleResize, { passive: true });
 
+    // Store for cleanup
+    App.resizeHandler = handleResize;
+
     UI.cacheCommonElements();
     UI.initLazyObserver();
     Comments.init();
@@ -3084,6 +3155,9 @@ window.onload = async () => {
 window.onbeforeunload = () => {
     if (App.lazyObserver) {
         App.lazyObserver.disconnect();
+    }
+    if (App.resizeHandler) {
+        window.removeEventListener('resize', App.resizeHandler);
     }
     Player.cleanupEmbedResources();
 };
