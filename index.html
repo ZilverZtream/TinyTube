@@ -152,6 +152,15 @@
             </div>
             <div class="setting-group"><label>Rename Profile</label><input id="profile-name-input" /></div>
             <div class="setting-group"><label>Custom API</label><input id="api-input" placeholder="https://..." /></div>
+            <div class="setting-group">
+                <label>Max Resolution</label>
+                <select id="max-res-select">
+                    <option value="360">360p</option>
+                    <option value="480">480p</option>
+                    <option value="720">720p</option>
+                    <option value="1080">1080p</option>
+                </select>
+            </div>
             <div class="button-row">
                 <button id="save-btn" class="focused-btn" onclick="App.actions.saveSettings()">SAVE</button>
                 <button id="cancel-btn" onclick="el('settings-overlay').classList.add('hidden'); App.view='BROWSE';">CANCEL</button>

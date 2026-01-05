@@ -213,16 +213,32 @@ const Utils = {
         }
         return 0;
     },
+    getPreferredMaxResolution: () => {
+        const stored = localStorage.getItem("tt_max_res");
+        const parsed = parseInt(stored, 10);
+        const allowed = [360, 480, 720, 1080];
+        if (allowed.includes(parsed)) return parsed;
+        return 1080;
+    },
+    applyResolutionCap: (formats) => {
+        const cap = Utils.getPreferredMaxResolution();
+        if (!cap) return formats || [];
+        const filtered = (formats || []).filter(f => {
+            const height = Utils.getFormatHeight(f);
+            return height && height <= cap;
+        });
+        return filtered.length ? filtered : (formats || []);
+    },
     isHighRes: (format) => {
         const label = (format.qualityLabel || "").toLowerCase();
         return label.includes("2160") || label.includes("4k") || Utils.getFormatHeight(format) > 1080;
     },
     pickPreferredStream: (formats) => {
-        const candidates = (formats || []).filter(f => {
+        const candidates = Utils.applyResolutionCap((formats || []).filter(f => {
             if (!f) return false;
             if (f.container === "mp4") return true;
             return f.mimeType && f.mimeType.indexOf("video/mp4") !== -1;
-        });
+        }));
         const filtered = candidates.filter(f => !Utils.isHighRes(f));
         const byHeight = (a, b) => Utils.getFormatHeight(b) - Utils.getFormatHeight(a);
         const prefers = (list) => list.sort(byHeight);
@@ -497,6 +513,7 @@ const DB = {
         el("modal-profile-id").textContent = `#${App.profileId + 1}`;
         el("profile-name-input").value = names[App.profileId];
         el("api-input").value = localStorage.getItem("customBase") || "";
+        el("max-res-select").value = Utils.getPreferredMaxResolution().toString();
         App.subsCache = null;
         App.subsCacheId = null;
         App.watchHistory = Utils.safeParse(localStorage.getItem(`tt_history_${App.profileId}`), {});
@@ -937,7 +954,8 @@ const Player = {
                     App.currentVideoData = data;
                     Player.setupCaptions(data);
                     const formats = (data.formatStreams || []).filter(s => s && s.url && (s.container === "mp4" || (s.mimeType || "").indexOf("video/mp4") !== -1));
-                    const preferred = Utils.pickPreferredStream(formats);
+                    const cappedFormats = Utils.applyResolutionCap(formats);
+                    const preferred = Utils.pickPreferredStream(cappedFormats);
                     if (preferred && preferred.url) {
                         streamUrl = preferred.url;
                         Utils.toast("Src: API");
@@ -1151,9 +1169,11 @@ App.actions = {
     saveSettings: () => {
         const name = el("profile-name-input").value.trim();
         const api = el("api-input").value.trim();
+        const maxRes = el("max-res-select").value;
         if(name) DB.saveProfileName(name);
         if(api && Utils.isValidUrl(api)) localStorage.setItem("customBase", api);
         else localStorage.removeItem("customBase");
+        if (maxRes) localStorage.setItem("tt_max_res", maxRes);
         location.reload();
     },
     switchProfile: () => {
@@ -1463,7 +1483,7 @@ function setupRemote() {
             if (e.keyCode === 10009) { el("settings-overlay").classList.add("hidden"); App.view = "BROWSE"; }
             else if (e.keyCode === 13) App.actions.saveSettings();
             else if (e.keyCode === 38 || e.keyCode === 40) {
-                const inputs = ["profile-name-input", "api-input", "save-btn"];
+                const inputs = ["profile-name-input", "api-input", "max-res-select", "save-btn"];
                 const active = document.activeElement;
                 let idx = inputs.indexOf(active ? active.id : "");
                 idx = e.keyCode === 40 ? Math.min(idx + 1, inputs.length - 1) : Math.max(idx - 1, 0);
