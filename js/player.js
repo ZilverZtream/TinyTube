@@ -584,13 +584,27 @@ const Player = {
             iframe.setAttribute("allowfullscreen", "");
             container.appendChild(iframe);
 
+            iframe.addEventListener("load", () => {
+                Player.cleanupEmbedResources();
+            });
+
             // Add timeout to detect if embed fails to load
             TinyTube.App.embedTimeout = setTimeout(() => {
                 // Check if we're still in enforce mode and if iframe hasn't loaded properly
                 if (TinyTube.App.view === "PLAYER" && TinyTube.App.playerMode === "ENFORCE" && TinyTube.App.currentVideoId === vId) {
                     const iframe = container.querySelector('#embed-iframe');
-                    if (iframe && !iframe.contentDocument) {
-                        Player.showError("Embed Failed", "Unable to load embedded player. Video may be restricted.");
+                    if (iframe) {
+                        try {
+                            if (!iframe.contentDocument) {
+                                Player.showError("Embed Failed", "Unable to load embedded player. Video may be restricted.");
+                            }
+                        } catch (error) {
+                            if (error && error.name === "DOMException") {
+                                Player.cleanupEmbedResources();
+                                return;
+                            }
+                            console.warn("Embed check failed:", error);
+                        }
                     }
                 }
                 TinyTube.App.embedTimeout = null;
