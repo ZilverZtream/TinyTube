@@ -769,9 +769,21 @@ const Cipher = {
     }
 };
 
-// --- NEW: AUTO-CIPHER BREAKER (Downloads & Parses player.js) ---
+// --- IMPROVED: ROBUST CIPHER BREAKER (v2.0) ---
 const CipherBreaker = {
     cache: null,
+
+    // Patterns to find the main decipher function (scramble function)
+    // We look for the signature: split("") -> loop/operations -> join("")
+    funcPatterns: [
+        // Standard pattern: a=a.split("");...return a.join("")
+        /\b[a-zA-Z0-9$]{2,}\s*=\s*function\(\s*a\s*\)\s*\{\s*a\s*=\s*a\.split\(\s*""\s*\);([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a,\d+\)/,
+        // Alternate pattern: a=a.split("");...a.join("") (no return)
+        /\b[a-zA-Z0-9$]{2,}\s*=\s*function\(\s*a\s*\)\s*\{\s*a\s*=\s*a\.split\(\s*""\s*\);(.*?);return\s+a\.join\(\s*""\s*\)/,
+        // Fallback: Just look for the body structure
+        /function\(\w+\)\{a=a\.split\(""\);(.*?);return a\.join\(""\)\}/
+    ],
+
     getCache: () => {
         const cached = Utils.safeParse(SafeStorage.getItem(CONFIG.CIPHER_CACHE_KEY), null);
         if (cached && cached.seq && cached.expiresAt && cached.expiresAt > Date.now()) {
@@ -780,6 +792,7 @@ const CipherBreaker = {
         }
         return null;
     },
+
     setCache: (seq) => {
         CipherBreaker.cache = seq;
         SafeStorage.setItem(CONFIG.CIPHER_CACHE_KEY, JSON.stringify({
@@ -787,104 +800,173 @@ const CipherBreaker = {
             expiresAt: Date.now() + CONFIG.CIPHER_CACHE_TTL
         }));
     },
+
     proxyUrl: (target) => {
         if (!CONFIG.CIPHER_PROXY) return target;
-        if (CONFIG.CIPHER_PROXY.includes("{url}")) {
-            return CONFIG.CIPHER_PROXY.replace("{url}", encodeURIComponent(target));
-        }
-        return CONFIG.CIPHER_PROXY + encodeURIComponent(target);
+        return CONFIG.CIPHER_PROXY.includes("{url}")
+            ? CONFIG.CIPHER_PROXY.replace("{url}", encodeURIComponent(target))
+            : CONFIG.CIPHER_PROXY + encodeURIComponent(target);
     },
+
     run: async () => {
         if (CipherBreaker.cache) return CipherBreaker.cache;
         const cached = CipherBreaker.getCache();
         if (cached) return cached;
+
         try {
-            console.log("CipherBreaker: Fetching...");
-            
-            // 1. Get player.js URL via a known video page
+            console.log("CipherBreaker: Fetching player.js...");
+
+            // Use a highly reliable, unrestricted video ID to fetch the player script
+            const videoId = "jNQXAC9IVRw"; // "Me at the zoo" - YouTube's first video
             const vidRes = await Utils.fetchWithTimeout(
-                CipherBreaker.proxyUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+                CipherBreaker.proxyUrl(`https://www.youtube.com/watch?v=${videoId}`)
             );
             const vidText = await vidRes.text();
-            
+
             const playerUrlMatch = vidText.match(/\/s\/player\/[a-zA-Z0-9]+\/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_]+\/base\.js/);
-            if (!playerUrlMatch) throw new Error("No player.js url");
-            
-            // 2. Fetch player.js
+            if (!playerUrlMatch) throw new Error("No player.js url found");
+
             const playerRes = await Utils.fetchWithTimeout(
                 CipherBreaker.proxyUrl("https://www.youtube.com" + playerUrlMatch[0])
             );
             const raw = await playerRes.text();
-            
-            // 3. Find decipher body
-            // We look for the pattern: split("") ... join("")
-            const funcMatch = raw.match(/([a-zA-Z0-9$]+)=function\(\w+\)\{a=a\.split\(""\);([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a,\d+\)/);
-            
-            if (!funcMatch) {
-                // Fallback Manual Parse if regex misses
-                const alt = raw.match(/function\(\w+\)\{a=a\.split\(""\);(.*?);return a\.join\(""\)\}/);
-                if (!alt) throw new Error("No decipher body");
-                return CipherBreaker.parseManual(alt[1]);
-            }
-            
-            const helperName = funcMatch[2]; 
-            const funcBody = funcMatch[0];
 
-            // 4. Find helper object definition
-            const helperRegex = new RegExp(`var ${helperName}=\\{([\\s\\S]*?)\\};`);
-            const helperMatch = raw.match(helperRegex);
-            if (!helperMatch) throw new Error("No helper object");
-            const helperContent = helperMatch[1];
+            let funcBody = null;
+            let helperName = null;
 
-            // 5. Map obfuscated names to atomic ops
-            const opsMap = {};
-            const swapM = helperContent.match(/(\w+):function\(\w+,\w+\)\{.*?a\[0\]=a\[\w+%\w+\.length\].*?\}/);
-            if (swapM) opsMap[swapM[1]] = "s";
-            
-            const spliceM = helperContent.match(/(\w+):function\(\w+,\w+\)\{.*?\.splice\(/);
-            if (spliceM) opsMap[spliceM[1]] = "sl";
-            
-            const reverseM = helperContent.match(/(\w+):function\(\w+\)\{.*?\.reverse\(/);
-            if (reverseM) opsMap[reverseM[1]] = "r";
-
-            // 6. Build sequence
-            const cmds = [];
-            const stmts = funcBody.split(";");
-            for (const s of stmts) {
-                if (s.includes(helperName)) {
-                    const method = s.match(/\.([a-zA-Z0-9$]+)\(/);
-                    const arg = s.match(/\(a,(\d+)\)/);
-                    if (method && opsMap[method[1]]) {
-                        cmds.push(opsMap[method[1]] + (arg ? arg[1] : ""));
+            // 1. Find the main decipher function using multiple regex strategies
+            for (const pattern of CipherBreaker.funcPatterns) {
+                const match = raw.match(pattern);
+                if (match) {
+                    if (pattern.source.includes("return")) {
+                        // Patterns with 'return' capture the function body or operations
+                        funcBody = match[1] || match[0];
+                        // Extract helper name from within the body (e.g., "AB.xy(a,3)")
+                        const helperMatch = funcBody.match(/([a-zA-Z0-9$]+)\.[a-zA-Z0-9$]+\(a/);
+                        if (helperMatch) helperName = helperMatch[1];
+                    } else {
+                        // First pattern captures both function and helper name directly
+                        funcBody = match[0];
+                        helperName = match[1];
                     }
+                    if (funcBody && helperName) break;
                 }
             }
-            
-            const seq = cmds.join(",");
-            console.log("CipherBreaker: " + seq);
-            CipherBreaker.setCache(seq);
-            return seq;
+
+            if (!funcBody || !helperName) {
+                console.log("CipherBreaker: Regex failed, trying simple fallback");
+                return CipherBreaker.parseManual(raw);
+            }
+
+            // 2. Extract the Helper Object Definition
+            const escapedName = helperName.replace(/\$/g, "\\$");
+
+            // Look for standard declaration: var/const/let Name = { ... };
+            const helperRegex = new RegExp(`(?:var|const|let)\\s+${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\};`);
+            let helperMatch = raw.match(helperRegex);
+
+            // Fallback: Look for assignment without keyword: Name = { ... };
+            if (!helperMatch) {
+                const looseHelperMatch = raw.match(new RegExp(`${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\};`));
+                if (!looseHelperMatch) throw new Error("Helper object not found");
+                helperMatch = looseHelperMatch;
+            }
+
+            // 3. Parse and solve
+            return CipherBreaker.parseFromText(funcBody, helperMatch[1], helperName);
+
         } catch (e) {
             console.log("CipherBreaker fail: " + e.message);
             return CONFIG.DEFAULT_CIPHER;
         }
     },
-    // Fallback parser that just looks for keywords
-    parseManual: (body) => {
-        const cmds = [];
-        const lines = body.split(";");
-        for (const l of lines) {
-            if (l.includes("reverse")) cmds.push("r");
-            else if (l.includes("splice")) {
-                const arg = l.match(/(\d+)/);
-                cmds.push("sl" + (arg ? arg[1] : "0"));
-            }
-            else if (l.indexOf("[0]") > -1) {
-                const arg = l.match(/(\d+)/);
-                cmds.push("s" + (arg ? arg[1] : "0"));
+
+    // Parse operations by analyzing code logic (Semantic Parsing)
+    parseFromText: (funcBody, helperContent, helperName) => {
+        const opsMap = {};
+
+        // FIXED: Robust Regex for both old and modern syntax
+        // Matches: "key:function(a){...}" AND "key(a){...}" (ES6 shorthand)
+        const funcRegex = /(\w+)\s*(?::\s*function)?\s*\(([^)]*)\)\s*\{([^}]*)\}/g;
+
+        let match;
+        while ((match = funcRegex.exec(helperContent)) !== null) {
+            const funcName = match[1];
+            const body = match[3];
+
+            if (body.includes('.reverse(')) {
+                opsMap[funcName] = "r";
+            } else if (body.includes('.splice') || body.includes('splice(')) {
+                opsMap[funcName] = "sl";
+            } else if (body.includes('%') && body.includes('.length')) {
+                opsMap[funcName] = "s";
             }
         }
-        return cmds.join(",");
+
+        // FIXED: Validate we found enough operations
+        if (Object.keys(opsMap).length < 2) {
+            throw new Error(`Failed to identify enough operations (found ${Object.keys(opsMap).length})`);
+        }
+
+        // Build the operation sequence from the decipher function body
+        const cmds = [];
+        const stmts = funcBody.split(";");
+        const escapedHelper = helperName.replace(/\$/g, "\\$");
+
+        for (const stmt of stmts) {
+            // Find calls like "Helper.method(a, 123)"
+            const methodMatch = stmt.match(new RegExp(`${escapedHelper}\\.([a-zA-Z0-9$]+)\\(`));
+
+            if (methodMatch && opsMap[methodMatch[1]]) {
+                const opCode = opsMap[methodMatch[1]];
+                const argMatch = stmt.match(/\(a\s*,\s*(\d+)\)/);
+                const arg = argMatch ? argMatch[1] : "";
+                cmds.push(opCode + arg);
+            }
+        }
+
+        // FIXED: Validate we extracted operations
+        if (cmds.length === 0) {
+            throw new Error("No operations extracted from decipher function");
+        }
+
+        const seq = cmds.join(",");
+        console.log("CipherBreaker: Solved -> " + seq);
+        CipherBreaker.setCache(seq);
+        return seq;
+    },
+
+    // IMPROVED: Emergency manual fallback with better error handling
+    parseManual: (raw) => {
+        try {
+            const bodies = raw.split("function");
+            for (const body of bodies) {
+                // Heuristic: Decipher function contains both split("") and join("")
+                if (body.includes('split("")') && body.includes('join("")')) {
+                    const cmds = [];
+                    const lines = body.split(";");
+                    for (const l of lines) {
+                        if (l.includes("reverse")) cmds.push("r");
+                        else if (l.includes("splice")) {
+                            const arg = l.match(/(\d+)/);
+                            cmds.push("sl" + (arg ? arg[1] : "0"));
+                        }
+                        else if (l.includes("[0]") && l.includes("%")) {
+                            const arg = l.match(/(\d+)/);
+                            cmds.push("s" + (arg ? arg[1] : "0"));
+                        }
+                    }
+                    if (cmds.length > 0) {
+                        const seq = cmds.join(",");
+                        console.log("CipherBreaker: Manual fallback -> " + seq);
+                        return seq;
+                    }
+                }
+            }
+        } catch (e) {
+            console.log("CipherBreaker: Manual parse error - " + e.message);
+        }
+        return CONFIG.DEFAULT_CIPHER;
     }
 };
 
