@@ -304,7 +304,9 @@ const Player = {
             return src ? { src, srclang: c.language_code || c.srclang || "", label: c.label || c.name || "Subtitles" } : null;
         }).filter(Boolean);
         if (!captions.length) return;
-        const p = TinyTube.App.playerElements.player;
+        if (!TinyTube.App.playerElements) Player.cacheElements();
+        const p = (TinyTube.App.playerElements && TinyTube.App.playerElements.player) || el("native-player");
+        if (!p) return;
         captions.forEach(c => {
             const track = document.createElement("track");
             track.kind = "subtitles";
