@@ -30,6 +30,7 @@ const App = {
     items: [],
     focus: { area: "menu", index: 0 },
     menuIdx: 0,
+    menuIds: ["menu-home", "menu-subs", "menu-trending", "menu-history", "menu-watchlater", "menu-search", "menu-settings"],
     profileId: 0,
     playerMode: "BYPASS",
     sponsorSegs: [],
@@ -381,7 +382,7 @@ function setupRemote() {
                         const next = App.focus.index + 4;
                         App.focus.index = next < App.items.length ? next : App.items.length - 1;
                     }
-                } else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>6) App.menuIdx=6; }
+                } else if (App.focus.area === "menu") { App.menuIdx++; if(App.menuIdx>App.menuIds.length-1) App.menuIdx=App.menuIds.length-1; }
                 break;
             case 37:
                 if (App.focus.area === "grid") {
