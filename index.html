@@ -58,7 +58,7 @@
             <div id="controls-hint">
                 <span class="hint-item"><span class="key red">■</span> Mode</span>
                 <span class="hint-item"><span class="key green">■</span> Speed</span>
-                <span class="hint-item"><span class="key yellow">■</span> Info</span>
+                <span class="hint-item"><span class="key yellow">■</span> Comments</span>
                 <span class="hint-item"><span class="key blue">■</span> Sub</span>
             </div>
         </div>
@@ -75,6 +75,25 @@
                     <span id="info-date">Jan 1, 2024</span>
                 </div>
                 <p id="info-description">Video description...</p>
+            </div>
+        </div>
+
+        <!-- Comments Overlay -->
+        <div id="comments-overlay" class="hidden">
+            <div class="comments-panel">
+                <div class="comments-header">
+                    <div>
+                        <h2>Comments</h2>
+                        <div class="comments-meta">
+                            <span id="comments-count">0 comments</span>
+                            <span class="separator">•</span>
+                            <span id="comments-page">Page 1</span>
+                        </div>
+                    </div>
+                    <div class="comments-hint">▲▼ Scroll</div>
+                </div>
+                <div id="comments-list" class="comments-list"></div>
+                <div id="comments-footer" class="comments-footer hidden">Loading more...</div>
             </div>
         </div>
     </div>

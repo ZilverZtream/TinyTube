@@ -588,6 +588,95 @@ iframe {
 #info-description::-webkit-scrollbar-track { background: transparent; }
 #info-description::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
 
+/* COMMENTS OVERLAY */
+#comments-overlay {
+    position: absolute;
+    top: 50px;
+    right: 60px;
+    width: 45%;
+    max-height: 75%;
+    background: rgba(0,0,0,0.92);
+    border-radius: 16px;
+    z-index: 106;
+    border: 1px solid #333;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    display: flex;
+}
+.comments-panel {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 24px 28px 18px;
+    box-sizing: border-box;
+}
+.comments-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+.comments-header h2 {
+    margin: 0 0 6px 0;
+    font-size: 26px;
+    font-weight: 600;
+    color: #fff;
+}
+.comments-meta {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: #aaa;
+}
+.comments-meta .separator {
+    margin: 0 10px;
+    color: #555;
+}
+.comments-hint {
+    font-size: 13px;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.comments-list {
+    overflow-y: auto;
+    padding-right: 6px;
+    flex-grow: 1;
+}
+.comment-item {
+    padding: 14px 0;
+    border-bottom: 1px solid #222;
+}
+.comment-item:last-child {
+    border-bottom: none;
+}
+.comment-author {
+    font-size: 15px;
+    font-weight: 600;
+    color: #ff4444;
+    margin-bottom: 6px;
+}
+.comment-meta {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+}
+.comment-text {
+    font-size: 14px;
+    color: #ccc;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.comments-footer {
+    padding-top: 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #666;
+}
+.comments-list::-webkit-scrollbar { width: 4px; }
+.comments-list::-webkit-scrollbar-track { background: transparent; }
+.comments-list::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+
 /* TOAST */
 #toast {
     position: fixed;
