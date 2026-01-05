@@ -5,15 +5,22 @@ const CACHE_NAME = 'tinytube-api-cache-v2';
 const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes in milliseconds
 const MAX_CACHE_ENTRIES = 50; // Limit cache size to prevent storage bloat
 
-// API patterns to cache
-const CACHEABLE_APIS = [
-    'trending',
+// API paths safe to cache
+const CACHEABLE_PATHS = [
+    '/trending',
     '/api/v1/trending'
 ];
 
+const cacheContext = {
+    profileId: '0',
+    customBase: ''
+};
+let cacheDisabled = false;
+
 // Check if URL should be cached
 function shouldCache(url) {
-    return CACHEABLE_APIS.some(pattern => url.includes(pattern));
+    const pathname = url.pathname;
+    return CACHEABLE_PATHS.some((path) => pathname === path);
 }
 
 function isSafeToCache(request) {
@@ -24,6 +31,8 @@ function buildCacheKey(request) {
     const url = new URL(request.url);
     const acceptLanguage = request.headers.get('Accept-Language') || '';
     url.searchParams.set('__sw_accept_language', acceptLanguage);
+    url.searchParams.set('__sw_profile', cacheContext.profileId);
+    url.searchParams.set('__sw_api', cacheContext.customBase);
     return new Request(url.toString(), { method: 'GET' });
 }
 
@@ -67,10 +76,10 @@ self.addEventListener('activate', (event) => {
 // Fetch event with caching strategy
 self.addEventListener('fetch', (event) => {
     const { request } = event;
-    const url = request.url;
+    const url = new URL(request.url);
 
     // Only cache GET requests to API endpoints
-    if (request.method !== 'GET' || !shouldCache(url) || !isSafeToCache(request)) {
+    if (cacheDisabled || request.method !== 'GET' || !shouldCache(url) || !isSafeToCache(request)) {
         return;
     }
 
@@ -162,5 +171,12 @@ self.addEventListener('message', (event) => {
                 console.log('Service Worker: Cache cleared');
             })
         );
+    }
+    if (event.data && event.data.type === 'SET_CACHE_CONTEXT') {
+        const nextProfileId = event.data.profileId;
+        const nextCustomBase = event.data.customBase;
+        cacheContext.profileId = nextProfileId !== undefined ? String(nextProfileId) : cacheContext.profileId;
+        cacheContext.customBase = nextCustomBase || '';
+        cacheDisabled = event.data.disableCache === true;
     }
 });
