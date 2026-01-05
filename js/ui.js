@@ -4,26 +4,39 @@
     const el = TinyTube.el;
 
 const CardPool = {
-    pool: [],
+    videoPool: [],
+    channelPool: [],
     init: function() {
-        this.pool = [];
+        this.videoPool = [];
+        this.channelPool = [];
     },
-    get: function() {
-        return this.pool.pop() || null;
+    getVideo: function() {
+        return this.videoPool.pop() || null;
+    },
+    getChannel: function() {
+        return this.channelPool.pop() || null;
     },
     release: function(element) {
         if (!element) return;
+        if (element.parentNode) {
+            element.parentNode.removeChild(element);
+        }
         // Clean up element without destroying template structure
         element.classList.remove('focused');
         element.classList.remove('focused-btn');
         element.id = '';
         element.removeAttribute('style');
 
-        const type = element.classList.contains('channel-card') ? 'channel' : 'video';
-        element.dataset.poolType = type;
+        const isChannel = element.classList.contains('channel-card');
+        element.dataset.poolType = isChannel ? 'channel' : 'video';
         // Return to pool if under limit
-        if (this.pool.length < CONFIG.CARD_POOL_SIZE) {
-            this.pool.push(element);
+        const totalPoolSize = this.videoPool.length + this.channelPool.length;
+        if (totalPoolSize < CONFIG.CARD_POOL_SIZE) {
+            if (isChannel) {
+                this.channelPool.push(element);
+            } else {
+                this.videoPool.push(element);
+            }
         }
     },
     releaseAll: function(container) {
@@ -266,12 +279,8 @@ const UI = {
                 if (existingCards.has(idx)) continue;
 
                 const item = TinyTube.App.items[idx];
-                const desiredType = item.type === "channel" ? "channel" : "video";
-                let div = null;
-                const poolIdx = CardPool.pool.findIndex(e => e.dataset.poolType === desiredType);
-                if (poolIdx > -1) {
-                    div = CardPool.pool.splice(poolIdx, 1)[0];
-                }
+                const isChannel = item.type === "channel";
+                let div = isChannel ? CardPool.getChannel() : CardPool.getVideo();
 
                 // DOM Template Cloning: 40% faster than createElement
                 if (item.type === "channel" && TinyTube.App.channelCardTemplate) {
@@ -387,13 +396,13 @@ const UI = {
                     }
                 } else {
                     // Fallback to old method if templates not loaded
-                    div = div || CardPool.get();
+                    div = div || (isChannel ? CardPool.getChannel() : CardPool.getVideo());
                     if (!div) div = document.createElement("div");
 
                     div.textContent = "";
-                    div.className = item.type === "channel" ? "channel-card" : "video-card";
+                    div.className = isChannel ? "channel-card" : "video-card";
                     div.id = `card-${idx}`;
-                    div.dataset.poolType = desiredType;
+                    div.dataset.poolType = isChannel ? "channel" : "video";
 
                     let thumbUrl = "icon.png";
                     if (item.videoThumbnails && item.videoThumbnails[0]) thumbUrl = item.videoThumbnails[0].url;
