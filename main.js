@@ -26,6 +26,9 @@ const CONFIG = {
     CLIENT_VERSION: "20.51.39",
     SDK_VERSION: 35,
     USER_AGENT: "com.google.android.youtube/20.51.39 (Linux; U; Android 15; US) gzip",
+    CIPHER_PROXY: "https://inv.perditum.com/api/v1/cors?url=",
+    CIPHER_CACHE_KEY: "tinytube_cipher_cache",
+    CIPHER_CACHE_TTL: 24 * 60 * 60 * 1000,
     // Default Cipher (Fallback if Breaker fails)
     CIPHER_SEQUENCE: "r,s3", 
     DEFAULT_CIPHER: "r,s3"
@@ -260,20 +263,56 @@ const Cipher = {
 // --- NEW: AUTO-CIPHER BREAKER (Downloads & Parses player.js) ---
 const CipherBreaker = {
     cache: null,
+    getCache: () => {
+        try {
+            const cached = Utils.safeParse(localStorage.getItem(CONFIG.CIPHER_CACHE_KEY), null);
+            if (cached && cached.seq && cached.expiresAt && cached.expiresAt > Date.now()) {
+                CipherBreaker.cache = cached.seq;
+                return cached.seq;
+            }
+        } catch (e) {
+            console.log("CipherBreaker cache read fail: " + e.message);
+        }
+        return null;
+    },
+    setCache: (seq) => {
+        CipherBreaker.cache = seq;
+        try {
+            localStorage.setItem(CONFIG.CIPHER_CACHE_KEY, JSON.stringify({
+                seq,
+                expiresAt: Date.now() + CONFIG.CIPHER_CACHE_TTL
+            }));
+        } catch (e) {
+            console.log("CipherBreaker cache write fail: " + e.message);
+        }
+    },
+    proxyUrl: (target) => {
+        if (!CONFIG.CIPHER_PROXY) return target;
+        if (CONFIG.CIPHER_PROXY.includes("{url}")) {
+            return CONFIG.CIPHER_PROXY.replace("{url}", encodeURIComponent(target));
+        }
+        return CONFIG.CIPHER_PROXY + encodeURIComponent(target);
+    },
     run: async () => {
         if (CipherBreaker.cache) return CipherBreaker.cache;
+        const cached = CipherBreaker.getCache();
+        if (cached) return cached;
         try {
             console.log("CipherBreaker: Fetching...");
             
             // 1. Get player.js URL via a known video page
-            const vidRes = await Utils.fetchWithTimeout("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            const vidRes = await Utils.fetchWithTimeout(
+                CipherBreaker.proxyUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+            );
             const vidText = await vidRes.text();
             
             const playerUrlMatch = vidText.match(/\/s\/player\/[a-zA-Z0-9]+\/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_]+\/base\.js/);
             if (!playerUrlMatch) throw new Error("No player.js url");
             
             // 2. Fetch player.js
-            const playerRes = await Utils.fetchWithTimeout("https://www.youtube.com" + playerUrlMatch[0]);
+            const playerRes = await Utils.fetchWithTimeout(
+                CipherBreaker.proxyUrl("https://www.youtube.com" + playerUrlMatch[0])
+            );
             const raw = await playerRes.text();
             
             // 3. Find decipher body
@@ -322,7 +361,7 @@ const CipherBreaker = {
             
             const seq = cmds.join(",");
             console.log("CipherBreaker: " + seq);
-            CipherBreaker.cache = seq;
+            CipherBreaker.setCache(seq);
             return seq;
         } catch (e) {
             console.log("CipherBreaker fail: " + e.message);
