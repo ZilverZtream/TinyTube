@@ -673,7 +673,8 @@ const Player = {
 
         // FIRE-AND-FORGET: SponsorBlock fetch (no longer blocks playback!)
         App.sponsorSegs = [];
-        Utils.fetchWithTimeout(`${SPONSOR_API}?videoID=${vId}&categories=["sponsor","selfpromo","intro"]`, {}, 5000)
+        const sponsorCategories = encodeURIComponent('["sponsor","selfpromo","intro"]');
+        Utils.fetchWithTimeout(`${SPONSOR_API}?videoID=${vId}&categories=${sponsorCategories}`, {}, 5000)
             .then(r => r.ok ? r.json() : [])
             .then(s => {
                 if (Array.isArray(s)) {
