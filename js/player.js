@@ -127,6 +127,10 @@ const Chapters = {
         return chapters.length >= 2 ? chapters : [];
     },
     open: () => {
+        if (!TinyTube.App.currentVideoData) {
+            TinyTube.Utils.toast("Loading video data...");
+            return;
+        }
         if (!TinyTube.App.videoChapters || TinyTube.App.videoChapters.length === 0) {
             TinyTube.Utils.toast("No chapters available");
             return;
@@ -820,13 +824,15 @@ const Player = {
             if (Comments.isOpen()) Comments.close();
             el("captions-overlay").classList.add("hidden");
             const d = TinyTube.App.currentVideoData;
-            if (d) {
-                el("info-title").textContent = d.title || "";
-                el("info-author").textContent = d.author || "";
-                el("info-views").textContent = TinyTube.Utils.formatViews(d.viewCount);
-                el("info-date").textContent = TinyTube.Utils.formatDate(d.published);
-                el("info-description").textContent = d.description || "";
+            if (!d) {
+                TinyTube.Utils.toast("Loading video info...");
+                return;
             }
+            el("info-title").textContent = d.title || "";
+            el("info-author").textContent = d.author || "";
+            el("info-views").textContent = TinyTube.Utils.formatViews(d.viewCount);
+            el("info-date").textContent = TinyTube.Utils.formatDate(d.published);
+            el("info-description").textContent = d.description || "";
             overlay.classList.remove("hidden");
             TinyTube.App.activeLayer = "INFO";
         }
@@ -1097,7 +1103,14 @@ const PlayerControls = {
         "control-language": () => Captions.open(),
         "control-comments": () => Comments.open(),
         "control-subscribe": () => { const i=TinyTube.App.currentVideoData; if(i) TinyTube.DB.toggleSub(i.authorId, i.author, TinyTube.Utils.getAuthorThumb(i)); },
-        "control-watchlater": () => { const i=TinyTube.App.currentVideoData; if(i) TinyTube.DB.addToWatchLater(i); },
+        "control-watchlater": () => {
+            const i=TinyTube.App.currentVideoData;
+            if (!i) {
+                TinyTube.Utils.toast("Loading video data...");
+                return;
+            }
+            TinyTube.DB.addToWatchLater(i);
+        },
         "control-help": () => Shortcuts.open()
     },
     init: () => {
