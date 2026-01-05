@@ -68,6 +68,11 @@ const CardPool = {
         // When handleImgError sets display:none, it persists across card reuse
         const img = element.querySelector('img');
         if (img) {
+            // FIX: Stop observing detached images to prevent observer leak
+            // Chrome 56 (Tizen 4.0) can leak memory on detached observed nodes
+            if (TinyTube.App.lazyObserver && TinyTube.App.lazyObserver.unobserve) {
+                TinyTube.App.lazyObserver.unobserve(img);
+            }
             img.style.display = ''; // Clear any display:none from error handler
             img.onerror = null;      // Clear old error handlers
             img.src = 'icon.png';    // Reset to placeholder
@@ -359,7 +364,14 @@ const UI = {
 
         if (TinyTube.App.focus.area !== "search" && TinyTube.App.focus.area !== "settings") {
             TinyTube.App.focus = { area: "grid", index: 0 };
-            UI.updateFocus();
+
+            // FIX: Defer focus update to match the rAF in renderVisibleRange
+            // Double defer to ensure DOM paint has occurred
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    UI.updateFocus();
+                });
+            });
         }
         return true;
     },
