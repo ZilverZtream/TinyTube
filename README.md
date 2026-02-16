@@ -12,20 +12,20 @@ TinyTube Pro is a performance-focused YouTube client built for Samsung Tizen TVs
 
 ---
 
-## 🚀 Key Features
+##  Key Features
 
-### 🛡️ Playback & Extraction
+###  Playback & Extraction
 * **Innertube Direct Playback:** Uses YouTube’s `/youtubei/v1/player` endpoint with Android client parameters (v20.51.39).
 * **Cipher Breaker + Engine:** Auto-downloads `player.js` to build a decipher sequence, with cached fallbacks.
 * **Native Embed Fallback:** Falls back to the YouTube iframe player for edge cases or restricted videos.
 
-### ⚡ Performance
+###  Performance
 * **Virtualized Grid:** Card pooling + virtual scroll to reduce DOM load.
 * **Service Worker Caching:** Short-lived API cache for trending data.
 * **Web Worker Parsing:** Large JSON responses parsed off the main thread.
 * **Preload Next Video:** Autoplay prefetch at ~80% playback.
 
-### 📺 Playback Experience
+###  Playback Experience
 * **SponsorBlock:** Auto-skips Sponsors, Intros, Outros, and Self-Promotion.
 * **DeArrow:** Replaces clickbait thumbnails and titles with community-crowdsourced accurate versions.
 * **Resume Watching:** Stores playback position per profile.
@@ -34,7 +34,7 @@ TinyTube Pro is a performance-focused YouTube client built for Samsung Tizen TVs
 * **Chapters:** Parse chapter timestamps from descriptions.
 * **Captions:** VTT subtitle support pulled from YouTube.
 
-### 🧭 Browsing & Library
+###  Browsing & Library
 * **Home / Trending / Subscriptions:** Invidious-backed feeds with trending categories.
 * **Search Filters:** Sort, date, duration, and type filters.
 * **Watch Later & History:** Local queues with profile separation.
@@ -42,7 +42,7 @@ TinyTube Pro is a performance-focused YouTube client built for Samsung Tizen TVs
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 TinyTube Pro uses a **3-Stage Waterfall Strategy** to keep playback reliable:
 
@@ -57,7 +57,7 @@ TinyTube Pro uses a **3-Stage Waterfall Strategy** to keep playback reliable:
 
 ---
 
-## 🎮 Controls
+##  Controls
 
 Designed for standard IR Remotes.
 
@@ -77,7 +77,7 @@ Designed for standard IR Remotes.
 
 ---
 
-## 🛠️ Installation
+##  Installation
 
 ### Prerequisites
 * **Tizen Studio** (with TV Extensions 4.0 or higher).
@@ -94,7 +94,7 @@ Designed for standard IR Remotes.
 
 ---
 
-## ⚙️ Configuration
+##  Configuration
 
 The app is zero-config out of the box, but you can customize it via the **Settings** tab (Gear Icon):
 
@@ -106,7 +106,7 @@ The app is zero-config out of the box, but you can customize it via the **Settin
 
 ---
 
-## 📝 Credits & Acknowledgments
+##  Credits & Acknowledgments
 
 * **Invidious Project:** For the open-source API powering the primary feed.
 * **Ajay Ramachandran:** For the SponsorBlock and DeArrow APIs.
@@ -115,4 +115,4 @@ The app is zero-config out of the box, but you can customize it via the **Settin
 
 ---
 
-*Built with ❤️ (and pure Vanilla JS) for the Tizen Community.*
+*Built with sweat (and pure Vanilla JS) for the Tizen Community.*
